@@ -19,6 +19,8 @@ mod errors;
 mod group;
 mod math;
 mod nizk;
+/// Abstractions for pluggable polynomial commitment backends.
+pub mod pcs;
 mod product_tree;
 mod r1cs;
 mod r1csproof;
