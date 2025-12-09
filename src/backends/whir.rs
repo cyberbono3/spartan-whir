@@ -54,9 +54,11 @@ pub fn ensure_whir_backend<B: ProofBackend>(backend: &B) -> Result<(), BackendEr
   }
 }
 
-/// Convert a Spartan scalar into WHIR's Goldilocks-like field. This currently returns an
-/// `Unsupported` error because the two fields are unrelated and a sound embedding strategy is
-/// required (e.g., hashing to field or a different circuit encoding).
+/// Convert a Spartan scalar into WHIR's Goldilocks-like field.
+///
+/// NOTE: this reduces the 255-bit Ristretto scalar modulo the Goldilocks prime. It is *not* an
+/// injective homomorphism and may not be appropriate for real proof systems without additional
+/// embedding design (e.g., hashing-to-field or circuit-level re-encoding). Use cautiously.
 pub fn scalar_to_whir_field(_scalar: &Scalar) -> Result<Field64, BackendError> {
   // This maps a Ristretto scalar (little-endian bytes) into the Goldilocks-like field by reducing
   // modulo the target field prime. This is deterministic but **not** an injective homomorphism and
@@ -135,6 +137,7 @@ pub fn build_whir_instance(
 ) -> Result<WhirR1csInstance, BackendError> {
   let matrices = build_whir_statement(view, shape)?;
   let (assignment_vars, assignment_inputs) = translate_assignments_to_whir(vars, inputs)?;
+  // TODO: add domain/FFT parameters and Merkle/hash selections compatible with WHIR config.
   Ok(WhirR1csInstance {
     num_constraints: view.num_constraints,
     num_variables: view.num_variables,
