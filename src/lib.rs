@@ -33,6 +33,7 @@ mod unipoly;
 pub mod backends;
 
 use core::cmp::max;
+use backends::{BackendError, BackendFlavor, ProofBackend};
 use errors::{ProofVerifyError, R1CSError};
 use merlin::Transcript;
 use r1cs::{R1CSCommitment, R1CSCommitmentGens, R1CSDecommitment, R1CSEvalProof, R1CSShape};
@@ -274,6 +275,21 @@ impl Instance {
       InputsAssignment { assignment: inputs },
     )
   }
+
+  /// Number of constraints in the padded R1CS.
+  pub(crate) fn num_cons(&self) -> usize {
+    self.inst.get_num_cons()
+  }
+
+  /// Number of variables in the padded R1CS.
+  pub(crate) fn num_vars(&self) -> usize {
+    self.inst.get_num_vars()
+  }
+
+  /// Number of public inputs.
+  pub(crate) fn num_inputs(&self) -> usize {
+    self.inst.get_num_inputs()
+  }
 }
 
 /// `SNARKGens` holds public parameters for producing and verifying proofs with the Spartan SNARK
@@ -421,6 +437,28 @@ impl SNARK {
     }
   }
 
+  /// Produce a SNARK proof using a pluggable backend. Defaults to Spartan's native prover when
+  /// `BackendFlavor::Native` is supplied; other backends are feature-gated.
+  pub fn prove_with_backend(
+    inst: &Instance,
+    comm: &ComputationCommitment,
+    decomm: &ComputationDecommitment,
+    vars: VarsAssignment,
+    inputs: &InputsAssignment,
+    gens: &SNARKGens,
+    transcript: &mut Transcript,
+    backend: &impl ProofBackend,
+  ) -> Result<Self, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Native => Ok(Self::prove(inst, comm, decomm, vars, inputs, gens, transcript)),
+      #[cfg(feature = "whir-backend")]
+      BackendFlavor::Whir => Err(BackendError::NotImplemented(
+        "WHIR-backed SNARK proving is not wired yet",
+      )),
+    }
+  }
+
   /// A method to verify the SNARK proof of the satisfiability of an R1CS instance
   pub fn verify(
     &self,
@@ -544,6 +582,25 @@ impl NIZK {
     NIZK {
       r1cs_sat_proof,
       r: (rx, ry),
+    }
+  }
+
+  /// Produce a NIZK proof using a pluggable backend. Currently only the native prover is wired.
+  pub fn prove_with_backend(
+    inst: &Instance,
+    vars: VarsAssignment,
+    input: &InputsAssignment,
+    gens: &NIZKGens,
+    transcript: &mut Transcript,
+    backend: &impl ProofBackend,
+  ) -> Result<Self, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Native => Ok(Self::prove(inst, vars, input, gens, transcript)),
+      #[cfg(feature = "whir-backend")]
+      BackendFlavor::Whir => Err(BackendError::NotImplemented(
+        "WHIR-backed NIZK proving is not wired yet",
+      )),
     }
   }
 

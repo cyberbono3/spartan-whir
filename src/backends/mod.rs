@@ -49,6 +49,8 @@ pub enum BackendError {
   FeatureNotEnabled(&'static str),
   /// The backend is known but the adapter is not wired yet.
   NotImplemented(&'static str),
+  /// The backend cannot operate over the current field or instance shape.
+  Unsupported(&'static str),
 }
 
 impl fmt::Display for BackendError {
@@ -59,6 +61,9 @@ impl fmt::Display for BackendError {
       }
       BackendError::NotImplemented(reason) => {
         write!(f, "backend not implemented: {reason}")
+      }
+      BackendError::Unsupported(reason) => {
+        write!(f, "backend unsupported for this instance: {reason}")
       }
     }
   }
@@ -145,6 +150,13 @@ pub struct WhirBackend {
 }
 
 #[cfg(feature = "whir-backend")]
+impl Default for WhirBackend {
+  fn default() -> Self {
+    Self::new(WhirConfig::default())
+  }
+}
+
+#[cfg(feature = "whir-backend")]
 impl WhirBackend {
   /// Create a WHIR backend with the provided configuration.
   pub const fn new(config: WhirConfig) -> Self {
@@ -169,3 +181,7 @@ impl ProofBackend for WhirBackend {
     ))
   }
 }
+
+/// WHIR integration helpers and adapters (feature gated).
+#[cfg(feature = "whir-backend")]
+pub mod whir;
