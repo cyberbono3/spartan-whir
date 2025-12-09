@@ -29,6 +29,8 @@ mod sumcheck;
 mod timer;
 mod transcript;
 mod unipoly;
+#[doc = "Adapters and configuration for optional proof backends such as WHIR."]
+pub mod backends;
 
 use core::cmp::max;
 use errors::{ProofVerifyError, R1CSError};
