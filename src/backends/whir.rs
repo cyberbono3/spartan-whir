@@ -11,6 +11,7 @@ use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, In
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
+use ark_ff::PrimeField;
 use whir::crypto::fields::Field64;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
@@ -57,9 +58,10 @@ pub fn ensure_whir_backend<B: ProofBackend>(backend: &B) -> Result<(), BackendEr
 /// `Unsupported` error because the two fields are unrelated and a sound embedding strategy is
 /// required (e.g., hashing to field or a different circuit encoding).
 pub fn scalar_to_whir_field(_scalar: &Scalar) -> Result<Field64, BackendError> {
-  Err(BackendError::Unsupported(
-    "curve25519 Scalar → WHIR field conversion not implemented; choose an embedding or redesign the constraint encoding",
-  ))
+  // This maps a Ristretto scalar (little-endian bytes) into the Goldilocks-like field by reducing
+  // modulo the target field prime. This is deterministic but **not** an injective homomorphism and
+  // must be reviewed for soundness for your use-case.
+  Ok(Field64::from_le_bytes_mod_order(&_scalar.to_bytes()))
 }
 
 /// Translate variable and input assignments into WHIR's field representation.
@@ -88,6 +90,17 @@ pub struct WhirSparseMatrices {
   pub C: Vec<(usize, usize, Field64)>,
 }
 
+/// R1CS instance and assignments expressed in WHIR's field.
+#[derive(Debug)]
+pub struct WhirR1csInstance {
+  pub num_constraints: usize,
+  pub num_variables: usize,
+  pub num_inputs: usize,
+  pub matrices: WhirSparseMatrices,
+  pub assignment_vars: Vec<Field64>,
+  pub assignment_inputs: Vec<Field64>,
+}
+
 /// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
 /// the full WHIR statement or handle domain parameters.
 pub fn build_whir_statement(
@@ -113,6 +126,25 @@ pub fn build_whir_statement(
   })
 }
 
+/// Bundle the converted matrices and assignments into a WHIR-ready R1CS instance representation.
+pub fn build_whir_instance(
+  view: &WhirR1csView<'_>,
+  shape: &R1CSShape,
+  vars: &VarsAssignment,
+  inputs: &InputsAssignment,
+) -> Result<WhirR1csInstance, BackendError> {
+  let matrices = build_whir_statement(view, shape)?;
+  let (assignment_vars, assignment_inputs) = translate_assignments_to_whir(vars, inputs)?;
+  Ok(WhirR1csInstance {
+    num_constraints: view.num_constraints,
+    num_variables: view.num_variables,
+    num_inputs: view.num_inputs,
+    matrices,
+    assignment_vars,
+    assignment_inputs,
+  })
+}
+
 /// Placeholder hook where the R1CS → WHIR translation and proof generation will live.
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
@@ -123,8 +155,8 @@ pub fn prove_r1cs_with_whir(
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
-  let matrices = build_whir_statement(&view, shape)?;
-  let _ = matrices;
+  let instance = build_whir_instance(&view, shape, view.assignment_vars, view.assignment_inputs)?;
+  let _ = instance;
   Err(BackendError::Unsupported(
     "WHIR proving path missing: sum-check/PCS wiring not implemented",
   ))
