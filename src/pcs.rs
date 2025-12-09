@@ -38,6 +38,7 @@ pub trait PcsBackend {
 /// commitment of the polynomial (ignoring the point/value). It exists to
 /// exercise the backend plumbing; do not rely on it for security.
 pub struct PedersenPcs<'a> {
+  /// Generator set for Pedersen commitments.
   pub gens: &'a crate::commitments::MultiCommitGens,
 }
 

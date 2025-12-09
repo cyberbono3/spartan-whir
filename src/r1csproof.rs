@@ -7,6 +7,7 @@ use super::errors::ProofVerifyError;
 use super::group::{CompressedGroup, GroupElement, VartimeMultiscalarMul};
 use super::math::Math;
 use super::nizk::{EqualityProof, KnowledgeProof, ProductProof};
+use super::pcs::PcsBackend;
 use super::r1cs::R1CSShape;
 use super::random::RandomTape;
 use super::scalar::Scalar;
@@ -600,4 +601,36 @@ mod tests {
       )
       .is_ok());
   }
+}
+
+/// Experimental helper: prove using an abstract PCS backend.
+///
+/// This currently delegates to the existing prover and ignores the backend,
+/// serving only as a plumbing hook for future refactors.
+pub fn r1cs_prove_with_pcs<PCS: PcsBackend<Scalar = Scalar>>(
+  inst: &R1CSShape,
+  vars: Vec<Scalar>,
+  input: &[Scalar],
+  gens: &R1CSGens,
+  transcript: &mut Transcript,
+  random_tape: &mut RandomTape,
+  _pcs: &PCS,
+) -> (R1CSProof, Vec<Scalar>, Vec<Scalar>) {
+  R1CSProof::prove(inst, vars, input, gens, transcript, random_tape)
+}
+
+/// Experimental helper: verify using an abstract PCS backend.
+///
+/// This currently delegates to the existing verifier and ignores the backend.
+pub fn r1cs_verify_with_pcs<PCS: PcsBackend<Scalar = Scalar>>(
+  proof: &R1CSProof,
+  num_vars: usize,
+  num_cons: usize,
+  input: &[Scalar],
+  evals: &(Scalar, Scalar, Scalar),
+  transcript: &mut Transcript,
+  gens: &R1CSGens,
+  _pcs: &PCS,
+) -> Result<(Vec<Scalar>, Vec<Scalar>), ProofVerifyError> {
+  proof.verify(num_vars, num_cons, input, evals, transcript, gens)
 }

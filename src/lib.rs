@@ -42,6 +42,8 @@ use scalar::Scalar;
 use serde::{Deserialize, Serialize};
 use timer::Timer;
 use transcript::{AppendToTranscript, ProofTranscript};
+pub use pcs::{PcsBackend, PedersenPcs};
+pub use r1csproof::{r1cs_prove_with_pcs, r1cs_verify_with_pcs};
 
 /// `ComputationCommitment` holds a public preprocessed NP statement (e.g., R1CS)
 #[derive(Serialize, Deserialize)]
