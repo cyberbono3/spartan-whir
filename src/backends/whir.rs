@@ -5,9 +5,11 @@
 //! signatures that downstream examples/tests will rely on.
 
 use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
-use crate::{InputsAssignment, Instance, VarsAssignment};
-use crate::{ComputationCommitment, ComputationDecommitment, SNARKGens};
+use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, Instance, VarsAssignment};
+use crate::SNARKGens;
+use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
+use whir::crypto::fields::Field64;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -49,6 +51,40 @@ pub fn ensure_whir_backend<B: ProofBackend>(backend: &B) -> Result<(), BackendEr
   }
 }
 
+/// Convert a Spartan scalar into WHIR's Goldilocks-like field. This currently returns an
+/// `Unsupported` error because the two fields are unrelated and a sound embedding strategy is
+/// required (e.g., hashing to field or a different circuit encoding).
+pub fn scalar_to_whir_field(_scalar: &Scalar) -> Result<Field64, BackendError> {
+  Err(BackendError::Unsupported(
+    "curve25519 Scalar → WHIR field conversion not implemented; choose an embedding or redesign the constraint encoding",
+  ))
+}
+
+/// Translate variable and input assignments into WHIR's field representation.
+pub fn translate_assignments_to_whir(
+  vars: &VarsAssignment,
+  inputs: &InputsAssignment,
+) -> Result<(Vec<Field64>, Vec<Field64>), BackendError> {
+  let mut whir_vars = Vec::with_capacity(vars.assignment.len());
+  for s in &vars.assignment {
+    whir_vars.push(scalar_to_whir_field(s)?);
+  }
+
+  let mut whir_inputs = Vec::with_capacity(inputs.assignment.len());
+  for s in &inputs.assignment {
+    whir_inputs.push(scalar_to_whir_field(s)?);
+  }
+
+  Ok((whir_vars, whir_inputs))
+}
+
+/// Placeholder for turning an R1CS instance into a WHIR statement (PCS/LDT inputs).
+pub fn build_whir_statement(_view: &WhirR1csView<'_>) -> Result<(), BackendError> {
+  Err(BackendError::NotImplemented(
+    "R1CS → WHIR statement mapping is not implemented yet",
+  ))
+}
+
 /// Placeholder hook where the R1CS → WHIR translation and proof generation will live.
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
@@ -58,8 +94,9 @@ pub fn prove_r1cs_with_whir(
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
-  Err(BackendError::NotImplemented(
-    "R1CS → WHIR translation is not implemented yet",
+  build_whir_statement(&view)?;
+  Err(BackendError::Unsupported(
+    "WHIR proving path missing: field conversion and statement wiring incomplete",
   ))
 }
 
@@ -78,10 +115,10 @@ pub fn prove_snark_with_whir(
 ) -> Result<crate::SNARK, BackendError> {
   // Snapshot the instance to feed into WHIR conversion logic.
   let view = WhirR1csView::new(inst, &vars, inputs)?;
-  // Early exit while field conversion is missing.
-  let _ = view;
-  let _ = backend;
+  let (whir_vars, whir_inputs) = translate_assignments_to_whir(&vars, inputs)?;
+  let _ = (whir_vars, whir_inputs);
+  prove_r1cs_with_whir(backend, view)?;
   Err(BackendError::Unsupported(
-    "curve25519 Scalar → WHIR field conversion and R1CS encoding not implemented",
+    "WHIR-backed SNARK proof object is not yet constructed",
   ))
 }

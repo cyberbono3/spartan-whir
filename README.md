@@ -419,6 +419,14 @@ Profiler:: NIZK
   * NIZK::verify 414.5102ms
 ```
 
+## Experimental WHIR backend
+
+An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PCS/sum-check provider. It is **not wired end-to-end yet**; field conversion and R1CS-to-WHIR encoding are still marked unsupported.
+
+- Enable with `--features whir-backend` (requires the `../whir` checkout alongside this repo).
+- Try the backend-switch example: `cargo run --example backend_switch --features whir-backend -- --backend whir`.
+- Current behavior: native backend runs as usual; the WHIR path returns an explicit unsupported-error until the adapter is completed.
+
 ## LICENSE
 
 See [LICENSE](./LICENSE)
