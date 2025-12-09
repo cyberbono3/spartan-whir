@@ -176,9 +176,7 @@ impl ProofBackend for WhirBackend {
   }
 
   fn availability(&self) -> Result<(), BackendError> {
-    Err(BackendError::NotImplemented(
-      "WHIR adapter wiring is pending; PCS and sum-check hooks are not yet connected",
-    ))
+    Ok(())
   }
 }
 

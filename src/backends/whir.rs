@@ -6,6 +6,8 @@
 
 use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
 use crate::{InputsAssignment, Instance, VarsAssignment};
+use crate::{ComputationCommitment, ComputationDecommitment, SNARKGens};
+use merlin::Transcript;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -58,5 +60,28 @@ pub fn prove_r1cs_with_whir(
   // verify or wrap.
   Err(BackendError::NotImplemented(
     "R1CS → WHIR translation is not implemented yet",
+  ))
+}
+
+/// Placeholder for a WHIR-backed SNARK proving path. Eventually this will translate Spartan's R1CS
+/// objects into WHIR statements and drive the WHIR prover, then wrap the result in a Spartan
+/// `SNARK` object (or a parallel structure).
+pub fn prove_snark_with_whir(
+  backend: &WhirBackend,
+  inst: &Instance,
+  _comm: &ComputationCommitment,
+  _decomm: &ComputationDecommitment,
+  vars: VarsAssignment,
+  inputs: &InputsAssignment,
+  _gens: &SNARKGens,
+  _transcript: &mut Transcript,
+) -> Result<crate::SNARK, BackendError> {
+  // Snapshot the instance to feed into WHIR conversion logic.
+  let view = WhirR1csView::new(inst, &vars, inputs)?;
+  // Early exit while field conversion is missing.
+  let _ = view;
+  let _ = backend;
+  Err(BackendError::Unsupported(
+    "curve25519 Scalar → WHIR field conversion and R1CS encoding not implemented",
   ))
 }

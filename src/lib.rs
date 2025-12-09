@@ -453,9 +453,16 @@ impl SNARK {
     match backend.flavor() {
       BackendFlavor::Native => Ok(Self::prove(inst, comm, decomm, vars, inputs, gens, transcript)),
       #[cfg(feature = "whir-backend")]
-      BackendFlavor::Whir => Err(BackendError::NotImplemented(
-        "WHIR-backed SNARK proving is not wired yet",
-      )),
+      BackendFlavor::Whir => crate::backends::whir::prove_snark_with_whir(
+        backend,
+        inst,
+        comm,
+        decomm,
+        vars,
+        inputs,
+        gens,
+        transcript,
+      ),
     }
   }
 
