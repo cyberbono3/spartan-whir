@@ -5,6 +5,8 @@
 //! signatures that downstream examples/tests will rely on.
 
 use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
+use crate::r1cs::R1CSShape;
+use crate::sparse_mlpoly::SparseMatEntry;
 use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, Instance, VarsAssignment};
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
@@ -78,25 +80,53 @@ pub fn translate_assignments_to_whir(
   Ok((whir_vars, whir_inputs))
 }
 
-/// Placeholder for turning an R1CS instance into a WHIR statement (PCS/LDT inputs).
-pub fn build_whir_statement(_view: &WhirR1csView<'_>) -> Result<(), BackendError> {
-  Err(BackendError::NotImplemented(
-    "R1CS → WHIR statement mapping is not implemented yet",
-  ))
+/// Sparse matrices re-encoded over WHIR's base field.
+#[derive(Debug)]
+pub struct WhirSparseMatrices {
+  pub A: Vec<(usize, usize, Field64)>,
+  pub B: Vec<(usize, usize, Field64)>,
+  pub C: Vec<(usize, usize, Field64)>,
+}
+
+/// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
+/// the full WHIR statement or handle domain parameters.
+pub fn build_whir_statement(
+  _view: &WhirR1csView<'_>,
+  shape: &R1CSShape,
+) -> Result<WhirSparseMatrices, BackendError> {
+  let (poly_a, poly_b, poly_c) = shape.sparse_matrices();
+
+  let mut convert_entries =
+    |entries: &[SparseMatEntry]| -> Result<Vec<(usize, usize, Field64)>, BackendError> {
+      let mut out = Vec::with_capacity(entries.len());
+      for entry in entries {
+        let field_val = scalar_to_whir_field(entry.val())?;
+        out.push((entry.row(), entry.col(), field_val));
+      }
+      Ok(out)
+    };
+
+  Ok(WhirSparseMatrices {
+    A: convert_entries(poly_a.entries())?,
+    B: convert_entries(poly_b.entries())?,
+    C: convert_entries(poly_c.entries())?,
+  })
 }
 
 /// Placeholder hook where the R1CS → WHIR translation and proof generation will live.
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
   view: WhirR1csView<'_>,
+  shape: &R1CSShape,
 ) -> Result<(), BackendError> {
   let _config: &WhirConfig = backend.config();
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
-  build_whir_statement(&view)?;
+  let matrices = build_whir_statement(&view, shape)?;
+  let _ = matrices;
   Err(BackendError::Unsupported(
-    "WHIR proving path missing: field conversion and statement wiring incomplete",
+    "WHIR proving path missing: sum-check/PCS wiring not implemented",
   ))
 }
 
@@ -117,7 +147,7 @@ pub fn prove_snark_with_whir(
   let view = WhirR1csView::new(inst, &vars, inputs)?;
   let (whir_vars, whir_inputs) = translate_assignments_to_whir(&vars, inputs)?;
   let _ = (whir_vars, whir_inputs);
-  prove_r1cs_with_whir(backend, view)?;
+  prove_r1cs_with_whir(backend, view, inst.shape())?;
   Err(BackendError::Unsupported(
     "WHIR-backed SNARK proof object is not yet constructed",
   ))

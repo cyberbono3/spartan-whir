@@ -151,6 +151,13 @@ impl R1CSShape {
     self.num_inputs
   }
 
+  /// Exposes the sparse R1CS matrices for downstream adapters.
+  pub(crate) fn sparse_matrices(
+    &self,
+  ) -> (&SparseMatPolynomial, &SparseMatPolynomial, &SparseMatPolynomial) {
+    (&self.A, &self.B, &self.C)
+  }
+
   pub fn get_digest(&self) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     bincode::serialize_into(&mut encoder, &self).unwrap();

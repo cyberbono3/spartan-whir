@@ -290,6 +290,11 @@ impl Instance {
   pub(crate) fn num_inputs(&self) -> usize {
     self.inst.get_num_inputs()
   }
+
+  /// Access the underlying R1CS shape for adapter-specific encodings.
+  pub(crate) fn shape(&self) -> &r1cs::R1CSShape {
+    &self.inst
+  }
 }
 
 /// `SNARKGens` holds public parameters for producing and verifying proofs with the Spartan SNARK
