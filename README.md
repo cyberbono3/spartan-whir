@@ -425,7 +425,7 @@ An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PC
 
 - Enable with `--features whir-backend` (requires the `../whir` checkout alongside this repo).
 - Try the backend-switch example: `cargo run --example backend_switch --features whir-backend -- --backend whir`.
-- Current behavior: native backend runs as usual; the WHIR path returns an explicit unsupported-error until the adapter is completed.
+- Current behavior: native backend runs as usual; the WHIR path converts assignments/matrices but stops with an explicit unsupported-error until PCS/sum-check wiring and protocol parameter mapping are completed.
 
 ## LICENSE
 

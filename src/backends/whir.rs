@@ -13,6 +13,11 @@ use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use ark_ff::PrimeField;
 use whir::crypto::fields::Field64;
+use whir::whir::parameters::WhirConfig as InnerWhirConfig;
+use whir::whir::parameters::{
+  DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
+  ProtocolParameters, SoundnessType,
+};
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -84,6 +89,17 @@ pub fn translate_assignments_to_whir(
   Ok((whir_vars, whir_inputs))
 }
 
+/// Placeholder for building WHIR protocol parameters from the backend config.
+///
+/// TODO: Select concrete Merkle hash, PoW strategy, folding factor, and domain sizes using WHIR
+/// types (`WhirConfig`, `ProtocolParameters`, `MultivariateParameters`), then return them to plug
+/// into the prover/verifier. This currently returns `NotImplemented` to avoid guessing.
+pub fn build_protocol_params_from_config(_backend: &WhirBackend) -> Result<(), BackendError> {
+  Err(BackendError::NotImplemented(
+    "WHIR protocol parameter mapping (Merkle/hash/PowStrategy) not implemented",
+  ))
+}
+
 /// Sparse matrices re-encoded over WHIR's base field.
 #[derive(Debug)]
 pub struct WhirSparseMatrices {
@@ -101,6 +117,10 @@ pub struct WhirR1csInstance {
   pub matrices: WhirSparseMatrices,
   pub assignment_vars: Vec<Field64>,
   pub assignment_inputs: Vec<Field64>,
+  /// Placeholder for protocol parameters once mapping is defined.
+  pub protocol_params: Option<ProtocolParameters<(), ()>>,
+  /// Placeholder for multivariate params (domain size) once mapping is defined.
+  pub mv_params: Option<MultivariateParameters<Field64>>,
 }
 
 /// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
@@ -145,6 +165,8 @@ pub fn build_whir_instance(
     matrices,
     assignment_vars,
     assignment_inputs,
+    protocol_params: None,
+    mv_params: None,
   })
 }
 
