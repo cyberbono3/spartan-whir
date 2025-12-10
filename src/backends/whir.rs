@@ -185,14 +185,15 @@ pub struct WhirR1csInstance {
   pub mv_params: MultivariateParameters<Field64>,
 }
 
-/// Context object that will eventually drive WHIR proving.
+/// Bundle of WHIR inputs ready for the prover once encoding is wired.
 pub struct WhirProverContext {
   pub instance: WhirR1csInstance,
+  pub polynomial: CoefficientList<Field64>,
 }
 
 impl WhirProverContext {
-  pub fn new(instance: WhirR1csInstance) -> Self {
-    Self { instance }
+  pub fn new(instance: WhirR1csInstance, polynomial: CoefficientList<Field64>) -> Self {
+    Self { instance, polynomial }
   }
 
   /// Placeholder hook to run the WHIR prover once R1CS → multilinear encoding is implemented.
@@ -256,7 +257,7 @@ pub fn encode_r1cs_to_whir_polynomial(
   _instance: &WhirR1csInstance,
 ) -> Result<CoefficientList<Field64>, BackendError> {
   Err(BackendError::Unsupported(
-    "R1CS → WHIR multilinear encoding is not implemented",
+    "R1CS → WHIR multilinear encoding is not implemented (need a circuit-specific mapping to multilinear evaluations)",
   ))
 }
 
@@ -280,8 +281,8 @@ pub fn prove_r1cs_with_whir(
     mv_params,
   )?;
   // Encode the R1CS into WHIR's polynomial form (currently unimplemented).
-  let _poly = encode_r1cs_to_whir_polynomial(&instance)?;
-  let ctx = WhirProverContext::new(instance);
+  let poly = encode_r1cs_to_whir_polynomial(&instance)?;
+  let ctx = WhirProverContext::new(instance, poly);
   ctx.prove()
 }
 
