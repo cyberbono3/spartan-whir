@@ -6,7 +6,7 @@ use crate::backends::whir::encoder::{NaiveZeroEncoder, ResidualEncoder};
 use crate::backends::WhirBackend;
 use crate::{Instance, InputsAssignment, VarsAssignment};
 use curve25519_dalek::scalar::Scalar;
-use crate::backends::whir::build_residual_statement;
+use crate::backends::whir::{build_residual_statement, verify_whir_proof_bundle};
 use crate::backends::whir::prove_r1cs_with_whir;
 
 #[test]
@@ -114,6 +114,7 @@ fn whir_round_trip_tiny_r1cs() {
   // Proof bundle should contain a non-empty transcript.
   let proof = res.unwrap();
   assert!(!proof.narg.is_empty());
+  verify_whir_proof_bundle(&proof).unwrap();
 }
 
 #[test]
@@ -141,5 +142,6 @@ fn whir_round_trip_two_constraints() {
   let backend = WhirBackend::default();
   let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
   let res = prove_r1cs_with_whir(&backend, view, inst.shape());
-  assert!(res.is_ok());
+  let proof = res.unwrap();
+  verify_whir_proof_bundle(&proof).unwrap();
 }

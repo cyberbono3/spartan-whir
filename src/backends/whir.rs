@@ -34,7 +34,9 @@ use whir::parameters::{
 use whir::whir::parameters::WhirConfig as ArkWhirConfig;
 use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::whir::{prover::Prover, verifier::Verifier};
-use spongefish::{DomainSeparator, ProverState};
+use spongefish::{ByteDomainSeparator, DomainSeparator, ProverState};
+use spongefish::BytesToUnitSerialize;
+use spongefish::UnitToBytes;
 use blake3::Hasher as Blake3Hasher;
 use rand::RngCore;
 use rand_chacha::ChaCha20Rng;
@@ -357,6 +359,21 @@ fn instance_hash_seed(commitment_root: &[u8], poly: &WhirPolynomial) -> [u8; 32]
   hasher.finalize().into()
 }
 
+fn challenger_bytes_from_root(
+  commitment_root: &[u8],
+  num_bytes: usize,
+) -> Result<Vec<u8>, BackendError> {
+  let ds: DomainSeparator =
+    DomainSeparator::new("whir_residual_sampling").add_bytes(commitment_root.len(), "commitment_root");
+  let mut ps: ProverState = ds.to_prover_state();
+  ps.add_bytes(commitment_root)
+    .map_err(|_| BackendError::Unsupported("failed to absorb commitment root into residual sampler"))?;
+  let mut out = vec![0u8; num_bytes];
+  ps.fill_challenge_bytes(&mut out)
+    .map_err(|_| BackendError::Unsupported("failed to derive residual sampling bytes from challenger"))?;
+  Ok(out)
+}
+
 #[allow(dead_code)]
 fn build_zero_sum_statement(poly: &WhirPolynomial) -> Result<WhirStatement<Field64>, BackendError> {
   let num_vars = poly.0.num_variables();
@@ -398,13 +415,24 @@ pub(crate) fn build_residual_statement(
   // Sample a small number of random corners deterministically from the commitment root to improve
   // coverage without enumerating the entire hypercube. This is still weaker than a full
   // challenge-sampled scheme but improves over fixed corners.
+  let num_bits_needed = num_vars.saturating_mul(RESIDUAL_SAMPLES.max(1));
+  let rand_bytes = challenger_bytes_from_root(commitment_root, (num_bits_needed + 7) / 8)?;
+  let mut byte_iter = rand_bytes.into_iter();
+  let mut current_byte = byte_iter.next().unwrap_or(0);
+  let mut bits_left = 8;
   let mut rng = ChaCha20Rng::from_seed(instance_hash_seed(commitment_root, poly));
   let mut seen: HashSet<u128> = HashSet::new();
   for _ in 0..RESIDUAL_SAMPLES {
     let mut coords = Vec::with_capacity(num_vars);
     let mut idx: u128 = 0;
     for bit_pos in 0..num_vars {
-      let bit = (rng.next_u64() & 1) as u8;
+      if bits_left == 0 {
+        current_byte = byte_iter.next().unwrap_or(0);
+        bits_left = 8;
+      }
+      let bit = current_byte & 1;
+      current_byte >>= 1;
+      bits_left -= 1;
       coords.push(Field64::from(bit as u64));
       idx |= (bit as u128) << bit_pos;
     }
@@ -421,10 +449,9 @@ pub(crate) fn build_residual_statement(
   // This still keeps verifier cost bounded by MAX_STATEMENT_VARS.
   if num_vars > 0 {
     let eval_len = 1usize << num_vars;
-    let mut weights: Vec<Field64> = Vec::with_capacity(eval_len);
-    for _ in 0..eval_len {
-      weights.push(Field64::from(rng.next_u64()));
-    }
+    let weights: Vec<Field64> = (0..eval_len)
+      .map(|_| Field64::from(rng.next_u64()))
+      .collect();
     let weight_list = EvaluationsList::new(weights);
     stmt.add_constraint(Weights::linear(weight_list), Field64::ZERO);
   }
@@ -478,6 +505,31 @@ pub fn prove_r1cs_with_encoder(
   let statement = build_residual_statement(&polynomial, commitment_root.as_ref())?;
   let ctx = WhirProverContext::new(instance, polynomial, statement);
   ctx.prove_with_witness(domainsep, prover_state, witness)
+}
+
+/// Verify a WHIR proof bundle produced by `prove_r1cs_with_whir`.
+pub fn verify_whir_proof_bundle(bundle: &WhirProofBundle) -> Result<(), BackendError> {
+  let verifier = Verifier::new(&bundle.config);
+  let domainsep = DomainSeparator::new("whir_adapter")
+    .commit_statement(&bundle.config)
+    .add_whir_proof(&bundle.config);
+  let mut verifier_state = domainsep.to_verifier_state(&bundle.narg);
+  let commitment_reader = CommitmentReader::new(&bundle.config);
+  let parsed_commitment = commitment_reader
+    .parse_commitment(&mut verifier_state)
+    .map_err(|_| BackendError::Unsupported("WHIR commitment parse failed during verify"))?;
+
+  // Optional sanity check: ensure the transcript commitment matches the stored bundle metadata.
+  if parsed_commitment.root != bundle.commitment.root {
+    return Err(BackendError::Unsupported(
+      "commitment root in transcript did not match bundle metadata",
+    ));
+  }
+
+  verifier
+    .verify(&mut verifier_state, &parsed_commitment, &bundle.statement)
+    .map_err(|_| BackendError::Unsupported("WHIR verification failed"))
+    .map(|_| ())
 }
 
 /// Placeholder for a WHIR-backed SNARK proving path. Eventually this will translate Spartan's R1CS
