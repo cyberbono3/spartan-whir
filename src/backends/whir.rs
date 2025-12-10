@@ -33,6 +33,7 @@ use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::whir::{prover::Prover, verifier::Verifier};
 use whir::whir::domainsep::WhirDomainSeparator;
 use spongefish::DomainSeparator;
+use whir::whir::committer::CommitmentReader;
 use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::poly_utils::evals::EvaluationsList;
 
@@ -252,7 +253,7 @@ impl WhirProverContext {
 
     // Verifier side.
     let mut verifier_state = domainsep.to_verifier_state(prover_state.narg_string());
-    let commitment_reader = whir::whir::committer::CommitmentReader::new(&self.instance.whir_config);
+    let commitment_reader = CommitmentReader::new(&self.instance.whir_config);
     let parsed_commitment = commitment_reader
       .parse_commitment(&mut verifier_state)
       .map_err(|_| BackendError::Unsupported("WHIR commitment parse failed"))?;
