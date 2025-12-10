@@ -247,6 +247,25 @@ pub struct WhirProofBundle {
   pub config: WhirConfigType,
 }
 
+/// Thin wrapper for a WHIR-backed SNARK-like object.
+pub struct WhirSnark {
+  /// The underlying WHIR proof bundle.
+  pub bundle: WhirProofBundle,
+  /// Shape metadata for the encoded R1CS.
+  pub shape: R1csSummary,
+}
+
+/// Minimal R1CS shape metadata carried alongside WHIR bundles.
+#[derive(Clone, Copy)]
+pub struct R1csSummary {
+  /// Number of constraints in the R1CS.
+  pub num_constraints: usize,
+  /// Number of variables in the R1CS.
+  pub num_variables: usize,
+  /// Number of public inputs in the R1CS.
+  pub num_inputs: usize,
+}
+
 impl WhirProverContext {
   /// Construct a new prover context from the translated instance, polynomial, and statement.
   pub fn new(
@@ -530,6 +549,30 @@ pub fn verify_whir_proof_bundle(bundle: &WhirProofBundle) -> Result<(), BackendE
     .verify(&mut verifier_state, &parsed_commitment, &bundle.statement)
     .map_err(|_| BackendError::Unsupported("WHIR verification failed"))
     .map(|_| ())
+}
+
+/// Produce a WHIR-backed SNARK wrapper that can be handed around separately from Spartan's native SNARK.
+pub fn prove_whir_snark(
+  backend: &WhirBackend,
+  inst: &Instance,
+  vars: VarsAssignment,
+  inputs: &InputsAssignment,
+) -> Result<WhirSnark, BackendError> {
+  let view = WhirR1csView::new(inst, &vars, inputs)?;
+  let bundle = prove_r1cs_with_whir(backend, view, inst.shape())?;
+  Ok(WhirSnark {
+    bundle,
+    shape: R1csSummary {
+      num_constraints: inst.num_cons(),
+      num_variables: inst.num_vars(),
+      num_inputs: inst.num_inputs(),
+    },
+  })
+}
+
+/// Verify a WHIR-backed SNARK wrapper.
+pub fn verify_whir_snark(snark: &WhirSnark) -> Result<(), BackendError> {
+  verify_whir_proof_bundle(&snark.bundle)
 }
 
 /// Placeholder for a WHIR-backed SNARK proving path. Eventually this will translate Spartan's R1CS

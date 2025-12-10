@@ -8,6 +8,7 @@ use crate::{Instance, InputsAssignment, VarsAssignment};
 use curve25519_dalek::scalar::Scalar;
 use crate::backends::whir::{build_residual_statement, verify_whir_proof_bundle};
 use crate::backends::whir::prove_r1cs_with_whir;
+use crate::backends::whir::{prove_whir_snark, verify_whir_snark};
 
 #[test]
 fn scalar_conversion_is_deterministic() {
@@ -167,5 +168,50 @@ fn whir_round_trip_with_public_input() {
   let backend = WhirBackend::default();
   let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
   let proof = prove_r1cs_with_whir(&backend, view, inst.shape()).unwrap();
+  verify_whir_proof_bundle(&proof).unwrap();
+}
+
+#[test]
+fn whir_snark_wrapper_round_trip() {
+  // Reuse the two-constraint instance to exercise the WhirSnark wrapper.
+  let num_cons = 2usize;
+  let num_vars = 2usize;
+  let num_inputs = 0usize;
+  let one = Scalar::ONE.to_bytes();
+  let three = Scalar::from(3u64).to_bytes();
+  let six = Scalar::from(6u64).to_bytes();
+  let A = vec![(0usize, 0usize, one), (1usize, 1usize, one)];
+  let B = vec![(0usize, 1usize, one), (1usize, 2usize, one)];
+  let C = vec![(0usize, 2usize, six), (1usize, 2usize, three)];
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+  let vars = VarsAssignment::new(&[Scalar::from(2u64).to_bytes(), Scalar::from(3u64).to_bytes()])
+    .unwrap();
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let backend = WhirBackend::default();
+  let snark = prove_whir_snark(&backend, &inst, vars, &inputs).unwrap();
+  verify_whir_snark(&snark).unwrap();
+}
+
+#[test]
+fn whir_residual_constraint_growth_is_bounded() {
+  // Build a slightly larger instance (4 constraints, 3 vars) and ensure the statement constraint
+  // count stays reasonable (fixed + samples + linear comb).
+  let num_cons = 4usize;
+  let num_vars = 3usize;
+  let num_inputs = 0usize;
+  let one = Scalar::ONE.to_bytes();
+  let A = vec![(0usize, 0usize, one), (1usize, 1usize, one), (2usize, 2usize, one)];
+  let B = vec![(0usize, 1usize, one), (1usize, 2usize, one), (2usize, 0usize, one)];
+  let C = vec![(0usize, 2usize, one), (1usize, 0usize, one), (2usize, 1usize, one)];
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+  let vars = VarsAssignment::new(&[Scalar::from(2u64).to_bytes(); 3]).unwrap();
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let backend = WhirBackend::default();
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let proof = prove_r1cs_with_whir(&backend, view, inst.shape()).unwrap();
+  // Expect constraints: all-zero + all-one + samples + linear combination (plus potential dedup).
+  assert!(proof.statement.constraints.len() <= 2 + 4 + 1 + 8);
   verify_whir_proof_bundle(&proof).unwrap();
 }
