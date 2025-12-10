@@ -8,7 +8,7 @@ This is a starting point for wiring Spartan R1CS into WHIR. It is **not** a comp
 
 ## Current encoder
 - `ResidualEncoder` computes per-constraint residuals `(A z)_i * (B z)_i - (C z)_i` over Goldilocks and returns them as a multilinear polynomial over the constraint index hypercube.
-- A `build_residual_statement` helper enforces the residual polynomial is zero at a small set of corners (all-zero, and all-one if `num_vars > 0`) to keep constraints bounded; WHIR proving is wired to the WHIR prover using this weak constraint set.
+- A `build_residual_statement` helper enforces the residual polynomial is zero at a small set of corners (all-zero, all-one, plus a few deterministic random samples) to keep constraints bounded; WHIR proving is wired to the WHIR prover using this still-weak constraint set.
 
 ## Current prover wiring
 - `WhirProverContext::prove` now drives WHIR’s `CommitmentWriter`, `Prover`, and `Verifier` with the residual polynomial and the naive all-corners statement, using WHIR’s default domain separator.

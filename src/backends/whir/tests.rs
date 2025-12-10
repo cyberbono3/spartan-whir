@@ -83,8 +83,8 @@ fn residual_encoder_matches_empty_r1cs() {
   // all evaluations must be zero
   assert!(poly.0.clone().into_iter().all(|v| v.is_zero()));
 
-  // Statement enforces zero at a bounded set of corners (all-zero and all-one).
+  // Statement enforces zero at a bounded set of corners (all-zero/all-one plus samples).
   let stmt = build_residual_statement(&poly).unwrap();
   assert_eq!(stmt.num_variables(), 2);
-  assert_eq!(stmt.constraints.len(), 2);
+  assert!(stmt.constraints.len() >= 2);
 }

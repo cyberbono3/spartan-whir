@@ -13,11 +13,11 @@ use crate::sparse_mlpoly::SparseMatEntry;
 use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, Instance, VarsAssignment};
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
-use encoder::{DefaultEncoder, WhirEncoder, WhirPolynomial};
 use merlin::Transcript;
 use rand::thread_rng;
 use spongefish_pow::blake3::Blake3PoW;
 use std::sync::Arc;
+use std::collections::HashSet;
 use whir::crypto::fields::{Field64, Field64_2};
 use whir::crypto::merkle_tree::blake3::{Blake3Compress, Blake3LeafHash, Blake3MerkleTreeParams};
 use whir::crypto::merkle_tree::parameters::default_config;
@@ -34,8 +34,11 @@ use whir::whir::{prover::Prover, verifier::Verifier};
 use whir::whir::domainsep::WhirDomainSeparator;
 use spongefish::DomainSeparator;
 use whir::whir::committer::CommitmentReader;
-use whir::whir::statement::{Statement as WhirStatement, Weights};
-use whir::poly_utils::evals::EvaluationsList;
+use blake3::Hasher as Blake3Hasher;
+use rand::RngCore;
+use rand_chacha::ChaCha20Rng;
+use rand::SeedableRng;
+use ark_ff::PrimeField;
 
 /// Concrete types chosen for the WHIR adapter, inspired by the upstream WHIR defaults.
 type MerkleConfig = Blake3MerkleTreeParams<Field64>;
@@ -43,6 +46,8 @@ type PowStrategy = Blake3PoW;
 type WhirConfigType = ArkWhirConfig<Field64, MerkleConfig, PowStrategy>;
 /// Avoids allocating gigantic linear weights; adjust as needed for experiments.
 const MAX_STATEMENT_VARS: usize = 20;
+/// Number of random residual checks to sample (on top of the fixed corners) for the WHIR statement.
+const RESIDUAL_SAMPLES: usize = 4;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -320,6 +325,17 @@ pub fn build_whir_instance(
   })
 }
 
+fn instance_hash_seed(poly: &WhirPolynomial) -> [u8; 32] {
+  let mut hasher = Blake3Hasher::new();
+  hasher.update(&(poly.0.num_variables() as u64).to_le_bytes());
+  hasher.update(&(poly.0.num_coeffs() as u64).to_le_bytes());
+  for coeff in poly.0.clone().into_iter() {
+    let limb = coeff.into_bigint().0[0].to_le_bytes();
+    hasher.update(&limb);
+  }
+  hasher.finalize().into()
+}
+
 fn build_zero_sum_statement(poly: &WhirPolynomial) -> Result<WhirStatement<Field64>, BackendError> {
   let num_vars = poly.0.num_variables();
   if num_vars > MAX_STATEMENT_VARS {
@@ -345,16 +361,37 @@ pub(crate) fn build_residual_statement(
       "residual statement would allocate more than MAX_STATEMENT_VARS variables",
     ));
   }
+
   let mut stmt = WhirStatement::new(num_vars);
 
-  // Always check the all-zero corner.
+  // Always check the all-zero and all-one corners if applicable.
   let zero_point = MultilinearPoint::new(vec![Field64::ZERO; num_vars]);
   stmt.add_constraint(Weights::evaluation(zero_point), Field64::ZERO);
-
   if num_vars > 0 {
-    // Also check the all-one corner.
     let one_point = MultilinearPoint::new(vec![Field64::ONE; num_vars]);
     stmt.add_constraint(Weights::evaluation(one_point), Field64::ZERO);
+  }
+
+  // Sample a small number of random corners deterministically from the instance to improve
+  // coverage without enumerating the entire hypercube. This is still weaker than a full
+  // challenge-sampled scheme but improves over fixed corners.
+  let mut rng = ChaCha20Rng::from_seed(instance_hash_seed(poly));
+  let mut seen: HashSet<u128> = HashSet::new();
+  for _ in 0..RESIDUAL_SAMPLES {
+    let mut coords = Vec::with_capacity(num_vars);
+    let mut idx: u128 = 0;
+    for bit_pos in 0..num_vars {
+      let bit = (rng.next_u64() & 1) as u8;
+      coords.push(Field64::from(bit as u64));
+      idx |= (bit as u128) << bit_pos;
+    }
+    if coords.is_empty() {
+      continue;
+    }
+    if seen.insert(idx) {
+      let point = MultilinearPoint::new(coords);
+      stmt.add_constraint(Weights::evaluation(point), Field64::ZERO);
+    }
   }
 
   Ok(stmt)
