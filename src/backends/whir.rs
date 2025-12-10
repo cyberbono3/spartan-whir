@@ -4,21 +4,23 @@
 //! implemented. Keeping the code here (instead of behind cfg stubs) lets us stage the type
 //! signatures that downstream examples/tests will rely on.
 
+mod encoder;
+
 use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
 use crate::r1cs::R1CSShape;
 use crate::sparse_mlpoly::SparseMatEntry;
 use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, Instance, VarsAssignment};
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
+use encoder::{DefaultEncoder, WhirEncoder, WhirPolynomial};
 use merlin::Transcript;
+use rand::thread_rng;
 use spongefish_pow::blake3::Blake3PoW;
 use std::sync::Arc;
-use rand::thread_rng;
 use whir::crypto::fields::{Field64, Field64_2};
 use whir::crypto::merkle_tree::blake3::{Blake3Compress, Blake3LeafHash, Blake3MerkleTreeParams};
 use whir::crypto::merkle_tree::parameters::default_config;
 use whir::ntt::RSDefault;
-use whir::poly_utils::coeffs::CoefficientList;
 use whir::whir::parameters::{
   DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
   ProtocolParameters, SoundnessType, WhirConfig as ArkWhirConfig,
@@ -133,7 +135,7 @@ pub fn build_protocol_params_from_config(
   let pow_bits = cfg.pow_bits.unwrap_or(0) as usize;
   let rate_log_inv = cfg.rate_log_inv.unwrap_or(1) as usize;
 
-  let mut rng = rand::thread_rng();
+  let mut rng = thread_rng();
   let (leaf_hash_params, two_to_one_params) =
     default_config::<Field64_2, Blake3LeafHash<Field64_2>, Blake3Compress>(&mut rng);
 
@@ -188,11 +190,11 @@ pub struct WhirR1csInstance {
 /// Bundle of WHIR inputs ready for the prover once encoding is wired.
 pub struct WhirProverContext {
   pub instance: WhirR1csInstance,
-  pub polynomial: CoefficientList<Field64>,
+  pub polynomial: WhirPolynomial,
 }
 
 impl WhirProverContext {
-  pub fn new(instance: WhirR1csInstance, polynomial: CoefficientList<Field64>) -> Self {
+  pub fn new(instance: WhirR1csInstance, polynomial: WhirPolynomial) -> Self {
     Self { instance, polynomial }
   }
 
@@ -252,20 +254,22 @@ pub fn build_whir_instance(
   })
 }
 
-/// Placeholder for encoding an R1CS into WHIR's multilinear polynomial representation.
-pub fn encode_r1cs_to_whir_polynomial(
-  _instance: &WhirR1csInstance,
-) -> Result<CoefficientList<Field64>, BackendError> {
-  Err(BackendError::Unsupported(
-    "R1CS → WHIR multilinear encoding is not implemented (need a circuit-specific mapping to multilinear evaluations)",
-  ))
-}
-
-/// Placeholder hook where the R1CS → WHIR translation and proof generation will live.
+/// Placeholder hook where the R1CS → WHIR translation and proof generation will live. Uses the
+/// default encoder (currently unimplemented).
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
   view: WhirR1csView<'_>,
   shape: &R1CSShape,
+) -> Result<(), BackendError> {
+  prove_r1cs_with_encoder(backend, view, shape, &DefaultEncoder)
+}
+
+/// Same as `prove_r1cs_with_whir` but lets callers supply a custom encoder implementation.
+pub fn prove_r1cs_with_encoder(
+  backend: &WhirBackend,
+  view: WhirR1csView<'_>,
+  shape: &R1CSShape,
+  encoder: &impl WhirEncoder,
 ) -> Result<(), BackendError> {
   let _config: &WhirConfig = backend.config();
   let (whir_config, mv_params) = build_protocol_params_from_config(backend, view.num_variables)?;
@@ -281,8 +285,8 @@ pub fn prove_r1cs_with_whir(
     mv_params,
   )?;
   // Encode the R1CS into WHIR's polynomial form (currently unimplemented).
-  let poly = encode_r1cs_to_whir_polynomial(&instance)?;
-  let ctx = WhirProverContext::new(instance, poly);
+  let polynomial = encoder.encode(&instance)?;
+  let ctx = WhirProverContext::new(instance, polynomial);
   ctx.prove()
 }
 
@@ -301,8 +305,7 @@ pub fn prove_snark_with_whir(
 ) -> Result<crate::SNARK, BackendError> {
   // Snapshot the instance to feed into WHIR conversion logic.
   let view = WhirR1csView::new(inst, &vars, inputs)?;
-  let (whir_vars, whir_inputs) = translate_assignments_to_whir(&vars, inputs)?;
-  let _ = (whir_vars, whir_inputs);
+  let (_whir_vars, _whir_inputs) = translate_assignments_to_whir(&vars, inputs)?;
   prove_r1cs_with_whir(backend, view, inst.shape())?;
   Err(BackendError::Unsupported(
     "WHIR-backed SNARK proof object is not yet constructed",
