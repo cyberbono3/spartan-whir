@@ -230,6 +230,21 @@ pub struct WhirProverContext {
   pub statement: WhirStatement<Field64>,
 }
 
+/// Artifact containing the WHIR proof transcript bytes and associated metadata.
+pub struct WhirProofBundle {
+  /// Fiat-Shamir transcript bytes (`narg_string`) produced by the prover.
+  pub narg: Vec<u8>,
+  /// Statement used for verification.
+  pub statement: WhirStatement<Field64>,
+  /// Parsed commitment (root, OOD points) derived from the transcript.
+  pub commitment: whir::whir::committer::reader::ParsedCommitment<
+    Field64,
+    <MerkleConfig as ark_crypto_primitives::merkle_tree::Config>::InnerDigest,
+  >,
+  /// WHIR configuration used to produce the proof.
+  pub config: WhirConfigType,
+}
+
 impl WhirProverContext {
   /// Construct a new prover context from the translated instance, polynomial, and statement.
   pub fn new(
@@ -250,7 +265,7 @@ impl WhirProverContext {
     domainsep: DomainSeparator,
     mut prover_state: ProverState,
     witness: whir::whir::committer::Witness<Field64, MerkleConfig>,
-  ) -> Result<(), BackendError>
+  ) -> Result<WhirProofBundle, BackendError>
   {
     let prover = Prover::new(self.instance.whir_config.clone());
     let verifier = Verifier::new(&self.instance.whir_config);
@@ -275,7 +290,13 @@ impl WhirProverContext {
       ));
     }
 
-    Ok(())
+    let narg = prover_state.narg_string().to_vec();
+    Ok(WhirProofBundle {
+      narg,
+      statement: self.statement,
+      commitment: parsed_commitment,
+      config: self.instance.whir_config,
+    })
   }
 }
 
@@ -417,7 +438,7 @@ pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
   view: WhirR1csView<'_>,
   shape: &R1CSShape,
-) -> Result<(), BackendError> {
+) -> Result<WhirProofBundle, BackendError> {
   prove_r1cs_with_encoder(backend, view, shape, &ResidualEncoder)
 }
 
@@ -427,7 +448,7 @@ pub fn prove_r1cs_with_encoder(
   view: WhirR1csView<'_>,
   shape: &R1CSShape,
   encoder: &impl WhirEncoder,
-) -> Result<(), BackendError> {
+) -> Result<WhirProofBundle, BackendError> {
   let _config: &WhirConfig = backend.config();
   let (whir_config, mv_params) = build_protocol_params_from_config(backend, view.num_variables)?;
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear

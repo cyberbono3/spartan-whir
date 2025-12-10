@@ -110,4 +110,36 @@ fn whir_round_trip_tiny_r1cs() {
   let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
   let res = prove_r1cs_with_whir(&backend, view, inst.shape());
   assert!(res.is_ok());
+
+  // Proof bundle should contain a non-empty transcript.
+  let proof = res.unwrap();
+  assert!(!proof.narg.is_empty());
+}
+
+#[test]
+fn whir_round_trip_two_constraints() {
+  // Constraints:
+  // 1) x * y = 6
+  // 2) y * 1 = 3  (fixes y)
+  let num_cons = 2usize;
+  let num_vars = 2usize;
+  let num_inputs = 0usize;
+  let one = Scalar::ONE.to_bytes();
+  let three = Scalar::from(3u64).to_bytes();
+  let six = Scalar::from(6u64).to_bytes();
+  // z = [x, y, 1]
+  let A = vec![(0usize, 0usize, one), (1usize, 1usize, one)];
+  let B = vec![(0usize, 1usize, one), (1usize, 2usize, one)]; // 1 is at col 2
+  let C = vec![(0usize, 2usize, six), (1usize, 2usize, three)];
+
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+
+  let vars = VarsAssignment::new(&[Scalar::from(2u64).to_bytes(), Scalar::from(3u64).to_bytes()])
+    .unwrap();
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let backend = WhirBackend::default();
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let res = prove_r1cs_with_whir(&backend, view, inst.shape());
+  assert!(res.is_ok());
 }
