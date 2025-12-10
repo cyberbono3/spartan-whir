@@ -87,11 +87,17 @@ pub fn translate_assignments_to_whir(
 ///
 /// TODO: Select concrete Merkle hash, PoW strategy, folding factor, and domain sizes using WHIR
 /// types (`WhirConfig`, `ProtocolParameters`, `MultivariateParameters`), then return them to plug
-/// into the prover/verifier. This currently returns `NotImplemented` to avoid guessing.
-pub fn build_protocol_params_from_config(_backend: &WhirBackend) -> Result<(), BackendError> {
-  Err(BackendError::NotImplemented(
-    "WHIR protocol parameter mapping (Merkle/hash/PowStrategy) not implemented",
-  ))
+/// into the prover/verifier. For now, this returns a hint string so we can stash chosen knobs
+/// without committing to a specific instantiation.
+pub fn build_protocol_params_from_config(backend: &WhirBackend) -> Result<String, BackendError> {
+  let cfg = backend.config();
+  let hint = format!(
+    "WHIR params: security={} pow_bits={:?} folding_factor={:?} field={:?} hash={:?} rate={:?}",
+    cfg.security_level, cfg.pow_bits, cfg.folding_factor, cfg.field, cfg.hash, cfg.rate_log_inv
+  );
+  // Placeholder: return the hint so we can propagate context even though the params are not yet
+  // constructed. TODO: swap this with real ProtocolParameters and MultivariateParameters.
+  Ok(hint)
 }
 
 /// Sparse matrices re-encoded over WHIR's base field.
@@ -148,6 +154,7 @@ pub fn build_whir_instance(
   shape: &R1CSShape,
   vars: &VarsAssignment,
   inputs: &InputsAssignment,
+  protocol_hint: Option<String>,
 ) -> Result<WhirR1csInstance, BackendError> {
   let matrices = build_whir_statement(view, shape)?;
   let (assignment_vars, assignment_inputs) = translate_assignments_to_whir(vars, inputs)?;
@@ -158,8 +165,8 @@ pub fn build_whir_instance(
     matrices,
     assignment_vars,
     assignment_inputs,
-    protocol_hint: None,
-    mv_hint: None,
+    protocol_hint,
+    mv_hint: Some(view.num_variables),
   })
 }
 
@@ -170,12 +177,24 @@ pub fn prove_r1cs_with_whir(
   shape: &R1CSShape,
 ) -> Result<(), BackendError> {
   let _config: &WhirConfig = backend.config();
-  // Surface protocol mapping gaps early.
-  build_protocol_params_from_config(backend)?;
+  // Surface protocol mapping gaps early and stash a hint.
+  let protocol_hint = match build_protocol_params_from_config(backend) {
+    Ok(hint) => Some(hint),
+    Err(e) => {
+      // Preserve the error message to propagate later.
+      return Err(e);
+    }
+  };
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
-  let instance = build_whir_instance(&view, shape, view.assignment_vars, view.assignment_inputs)?;
+  let instance = build_whir_instance(
+    &view,
+    shape,
+    view.assignment_vars,
+    view.assignment_inputs,
+    protocol_hint,
+  )?;
   let _ = instance;
   Err(BackendError::Unsupported(
     "WHIR proving path missing: sum-check/PCS wiring not implemented",
