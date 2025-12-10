@@ -462,16 +462,23 @@ impl SNARK {
     match backend.flavor() {
       BackendFlavor::Native => Ok(Self::prove(inst, comm, decomm, vars, inputs, gens, transcript)),
       #[cfg(feature = "whir-backend")]
-      BackendFlavor::Whir => crate::backends::whir::prove_snark_with_whir(
-        backend,
-        inst,
-        comm,
-        decomm,
-        vars,
-        inputs,
-        gens,
-        transcript,
-      ),
+      BackendFlavor::Whir => {
+        let Some(whir_backend) = backend
+          .as_any()
+          .downcast_ref::<crate::backends::WhirBackend>() else {
+          return Err(BackendError::Unsupported("expected WhirBackend for WHIR flavor"));
+        };
+        crate::backends::whir::prove_snark_with_whir(
+          whir_backend,
+          inst,
+          comm,
+          decomm,
+          vars,
+          inputs,
+          gens,
+          transcript,
+        )
+      }
     }
   }
 

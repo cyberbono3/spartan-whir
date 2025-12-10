@@ -1,5 +1,6 @@
 use super::WhirR1csInstance;
 use crate::backends::BackendError;
+use ark_ff::{AdditiveGroup, Field};
 use whir::crypto::fields::Field64;
 use whir::poly_utils::coeffs::CoefficientList;
 
@@ -8,6 +9,7 @@ pub struct WhirPolynomial(pub CoefficientList<Field64>);
 
 /// Trait for translating a Spartan-origin R1CS into the multilinear polynomial WHIR expects.
 pub trait WhirEncoder {
+  /// Translate the given R1CS instance into a multilinear polynomial over WHIR's field.
   fn encode(&self, instance: &WhirR1csInstance) -> Result<WhirPolynomial, BackendError>;
 }
 

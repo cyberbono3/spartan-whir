@@ -11,8 +11,8 @@ use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
 use crate::r1cs::R1CSShape;
 use crate::sparse_mlpoly::SparseMatEntry;
 use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, Instance, VarsAssignment};
+use crate::scalar::Scalar;
 use crate::SNARKGens;
-use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use rand::thread_rng;
 use spongefish_pow::blake3::Blake3PoW;
@@ -24,21 +24,22 @@ use whir::crypto::merkle_tree::parameters::default_config;
 use whir::ntt::RSDefault;
 use whir::poly_utils::evals::EvaluationsList;
 use whir::poly_utils::multilinear::MultilinearPoint;
+use whir::whir::domainsep::WhirDomainSeparator;
 use whir::whir::committer::CommitmentWriter;
-use whir::whir::parameters::{
-  DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
-  ProtocolParameters, SoundnessType, WhirConfig as ArkWhirConfig,
+use whir::whir::committer::CommitmentReader;
+use whir::parameters::{
+  DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters, ProtocolParameters,
+  SoundnessType,
 };
+use whir::whir::parameters::WhirConfig as ArkWhirConfig;
 use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::whir::{prover::Prover, verifier::Verifier};
-use whir::whir::domainsep::WhirDomainSeparator;
 use spongefish::DomainSeparator;
-use whir::whir::committer::CommitmentReader;
 use blake3::Hasher as Blake3Hasher;
 use rand::RngCore;
 use rand_chacha::ChaCha20Rng;
 use rand::SeedableRng;
-use ark_ff::PrimeField;
+use ark_ff::{AdditiveGroup, Field};
 
 /// Concrete types chosen for the WHIR adapter, inspired by the upstream WHIR defaults.
 type MerkleConfig = Blake3MerkleTreeParams<Field64>;
@@ -50,7 +51,6 @@ const MAX_STATEMENT_VARS: usize = 20;
 const RESIDUAL_SAMPLES: usize = 4;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
-#[derive(Debug)]
 pub struct WhirR1csView<'a> {
   /// Number of constraints in the padded R1CS.
   pub num_constraints: usize,
@@ -191,19 +191,28 @@ pub fn build_protocol_params_from_config(
 /// Sparse matrices re-encoded over WHIR's base field.
 #[derive(Debug)]
 pub struct WhirSparseMatrices {
+  /// Sparse entries of the A matrix as `(row, col, value)`.
   pub A: Vec<(usize, usize, Field64)>,
+  /// Sparse entries of the B matrix as `(row, col, value)`.
   pub B: Vec<(usize, usize, Field64)>,
+  /// Sparse entries of the C matrix as `(row, col, value)`.
   pub C: Vec<(usize, usize, Field64)>,
 }
 
 /// R1CS instance and assignments expressed in WHIR's field.
 #[derive(Debug)]
 pub struct WhirR1csInstance {
+  /// Number of constraints in the padded instance.
   pub num_constraints: usize,
+  /// Number of variables.
   pub num_variables: usize,
+  /// Number of public inputs.
   pub num_inputs: usize,
+  /// Sparse matrices converted into the WHIR field.
   pub matrices: WhirSparseMatrices,
+  /// Witness assignment encoded in Goldilocks.
   pub assignment_vars: Vec<Field64>,
+  /// Public inputs encoded in Goldilocks.
   pub assignment_inputs: Vec<Field64>,
   /// WHIR configuration with Merkle/hash/pow settings.
   pub whir_config: WhirConfigType,
@@ -213,12 +222,16 @@ pub struct WhirR1csInstance {
 
 /// Bundle of WHIR inputs ready for the prover once encoding is wired.
 pub struct WhirProverContext {
+  /// WHIR-friendly R1CS instance description.
   pub instance: WhirR1csInstance,
+  /// Multilinear polynomial committed to the Merkle tree.
   pub polynomial: WhirPolynomial,
+  /// Statement constraining the polynomial evaluations.
   pub statement: WhirStatement<Field64>,
 }
 
 impl WhirProverContext {
+  /// Construct a new prover context from the translated instance, polynomial, and statement.
   pub fn new(
     instance: WhirR1csInstance,
     polynomial: WhirPolynomial,
@@ -263,15 +276,16 @@ impl WhirProverContext {
       .parse_commitment(&mut verifier_state)
       .map_err(|_| BackendError::Unsupported("WHIR commitment parse failed"))?;
 
-    verifier
-      .verify(
-        &mut verifier_state,
-        &parsed_commitment,
-        &self.statement,
-        constraint_eval_point,
-        &deferred,
-      )
+    let (verifier_point, verifier_deferred) = verifier
+      .verify(&mut verifier_state, &parsed_commitment, &self.statement)
       .map_err(|_| BackendError::Unsupported("WHIR verification failed"))?;
+
+    // Sanity-check that prover and verifier agree on deferred constraint data.
+    if verifier_point != constraint_eval_point || verifier_deferred != deferred {
+      return Err(BackendError::Unsupported(
+        "WHIR verifier outputs did not match prover outputs",
+      ));
+    }
 
     Ok(())
   }
@@ -285,7 +299,7 @@ pub fn build_whir_statement(
 ) -> Result<WhirSparseMatrices, BackendError> {
   let (poly_a, poly_b, poly_c) = shape.sparse_matrices();
 
-  let mut convert_entries =
+  let convert_entries =
     |entries: &[SparseMatEntry]| -> Result<Vec<(usize, usize, Field64)>, BackendError> {
       let mut out = Vec::with_capacity(entries.len());
       for entry in entries {
@@ -325,14 +339,11 @@ pub fn build_whir_instance(
   })
 }
 
-fn instance_hash_seed(poly: &WhirPolynomial) -> [u8; 32] {
+fn instance_hash_seed(commitment_root: &[u8], poly: &WhirPolynomial) -> [u8; 32] {
   let mut hasher = Blake3Hasher::new();
+  hasher.update(commitment_root);
   hasher.update(&(poly.0.num_variables() as u64).to_le_bytes());
   hasher.update(&(poly.0.num_coeffs() as u64).to_le_bytes());
-  for coeff in poly.0.clone().into_iter() {
-    let limb = coeff.into_bigint().0[0].to_le_bytes();
-    hasher.update(&limb);
-  }
   hasher.finalize().into()
 }
 
@@ -354,6 +365,7 @@ fn build_zero_sum_statement(poly: &WhirPolynomial) -> Result<WhirStatement<Field
 /// corners and should be replaced with a proper challenge-sampled scheme.
 pub(crate) fn build_residual_statement(
   poly: &WhirPolynomial,
+  commitment_root: &[u8],
 ) -> Result<WhirStatement<Field64>, BackendError> {
   let num_vars = poly.0.num_variables();
   if num_vars > MAX_STATEMENT_VARS {
@@ -365,17 +377,17 @@ pub(crate) fn build_residual_statement(
   let mut stmt = WhirStatement::new(num_vars);
 
   // Always check the all-zero and all-one corners if applicable.
-  let zero_point = MultilinearPoint::new(vec![Field64::ZERO; num_vars]);
+  let zero_point = MultilinearPoint(vec![Field64::ZERO; num_vars]);
   stmt.add_constraint(Weights::evaluation(zero_point), Field64::ZERO);
   if num_vars > 0 {
-    let one_point = MultilinearPoint::new(vec![Field64::ONE; num_vars]);
+    let one_point = MultilinearPoint(vec![Field64::ONE; num_vars]);
     stmt.add_constraint(Weights::evaluation(one_point), Field64::ZERO);
   }
 
-  // Sample a small number of random corners deterministically from the instance to improve
+  // Sample a small number of random corners deterministically from the commitment root to improve
   // coverage without enumerating the entire hypercube. This is still weaker than a full
   // challenge-sampled scheme but improves over fixed corners.
-  let mut rng = ChaCha20Rng::from_seed(instance_hash_seed(poly));
+  let mut rng = ChaCha20Rng::from_seed(instance_hash_seed(commitment_root, poly));
   let mut seen: HashSet<u128> = HashSet::new();
   for _ in 0..RESIDUAL_SAMPLES {
     let mut coords = Vec::with_capacity(num_vars);
@@ -389,7 +401,7 @@ pub(crate) fn build_residual_statement(
       continue;
     }
     if seen.insert(idx) {
-      let point = MultilinearPoint::new(coords);
+      let point = MultilinearPoint(coords);
       stmt.add_constraint(Weights::evaluation(point), Field64::ZERO);
     }
   }
@@ -429,7 +441,18 @@ pub fn prove_r1cs_with_encoder(
   )?;
   // Encode the R1CS into WHIR's polynomial form.
   let polynomial = encoder.encode(&instance)?;
-  let statement = build_residual_statement(&polynomial)?;
+  // Build a commitment up-front to derive a Merkle root for deterministic constraint sampling.
+  let domainsep = DomainSeparator::new("whir_adapter")
+    .commit_statement(&instance.whir_config)
+    .add_whir_proof(&instance.whir_config);
+  let mut prover_state = domainsep.to_prover_state();
+  let committer = CommitmentWriter::new(instance.whir_config.clone());
+  let witness = committer
+    .commit(&mut prover_state, &polynomial.0)
+    .map_err(|_| BackendError::Unsupported("WHIR commitment failed"))?;
+  let commitment_root = witness.root();
+
+  let statement = build_residual_statement(&polynomial, commitment_root.as_ref())?;
   let ctx = WhirProverContext::new(instance, polynomial, statement);
   ctx.prove()
 }

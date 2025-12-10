@@ -5,6 +5,7 @@
 //! intentionally minimal and feature-gated so the existing code paths remain
 //! unchanged until a full adapter is wired in.
 
+use core::any::Any;
 use core::fmt;
 
 /// Selects which backend should power Spartan's proof generation.
@@ -15,6 +16,12 @@ pub enum BackendFlavor {
   #[cfg(feature = "whir-backend")]
   /// Use the WHIR PCS/sum-check backend (feature-gated).
   Whir,
+}
+
+impl Default for BackendFlavor {
+  fn default() -> Self {
+    BackendFlavor::Native
+  }
 }
 
 /// Shared configuration knobs for pluggable backends.
@@ -73,12 +80,20 @@ impl fmt::Display for BackendError {
 impl std::error::Error for BackendError {}
 
 /// Minimal interface each backend should satisfy to plug into Spartan.
-pub trait ProofBackend {
+pub trait ProofBackend: Any {
   /// Identify the backend being used.
   fn flavor(&self) -> BackendFlavor;
 
   /// Lightweight readiness check before attempting to prove or verify.
   fn availability(&self) -> Result<(), BackendError>;
+
+  /// Downcast hook for callers that need a concrete backend implementation.
+  fn as_any(&self) -> &dyn Any
+  where
+    Self: Sized,
+  {
+    self
+  }
 }
 
 /// Marker type for the existing Spartan implementation.
