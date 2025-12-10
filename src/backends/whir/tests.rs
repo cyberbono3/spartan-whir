@@ -7,6 +7,7 @@ use crate::backends::WhirBackend;
 use crate::{Instance, InputsAssignment, VarsAssignment};
 use curve25519_dalek::scalar::Scalar;
 use crate::backends::whir::build_residual_statement;
+use crate::backends::whir::prove_r1cs_with_whir;
 
 #[test]
 fn scalar_conversion_is_deterministic() {
@@ -87,4 +88,26 @@ fn residual_encoder_matches_empty_r1cs() {
   let stmt = build_residual_statement(&poly, &[0u8; 32]).unwrap();
   assert_eq!(stmt.num_variables(), 2);
   assert!(stmt.constraints.len() >= 2);
+}
+
+#[test]
+fn whir_round_trip_tiny_r1cs() {
+  // Constraint: z * z = z with z = 1 over Goldilocks.
+  let num_cons = 1usize;
+  let num_vars = 1usize;
+  let num_inputs = 0usize;
+  // A, B, C entries: single row/col with coefficient 1.
+  let one = Scalar::ONE.to_bytes();
+  let A = vec![(0usize, 0usize, one)];
+  let B = vec![(0usize, 0usize, one)];
+  let C = vec![(0usize, 0usize, one)];
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+
+  let vars = VarsAssignment::new(&[Scalar::ONE.to_bytes()]).unwrap();
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let backend = WhirBackend::default();
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let res = prove_r1cs_with_whir(&backend, view, inst.shape());
+  assert!(res.is_ok());
 }

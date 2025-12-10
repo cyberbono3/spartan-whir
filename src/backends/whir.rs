@@ -34,7 +34,7 @@ use whir::parameters::{
 use whir::whir::parameters::WhirConfig as ArkWhirConfig;
 use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::whir::{prover::Prover, verifier::Verifier};
-use spongefish::DomainSeparator;
+use spongefish::{DomainSeparator, ProverState};
 use blake3::Hasher as Blake3Hasher;
 use rand::RngCore;
 use rand_chacha::ChaCha20Rng;
@@ -244,32 +244,21 @@ impl WhirProverContext {
     }
   }
 
-  /// Placeholder hook to run the WHIR prover once R1CS → multilinear encoding is implemented.
-  pub fn prove(self) -> Result<(), BackendError> {
-    // Build prover and verifier configs.
+  /// Run the WHIR prover/ verifier using a precomputed commitment witness to avoid double commits.
+  pub fn prove_with_witness(
+    self,
+    domainsep: DomainSeparator,
+    mut prover_state: ProverState,
+    witness: whir::whir::committer::Witness<Field64, MerkleConfig>,
+  ) -> Result<(), BackendError>
+  {
     let prover = Prover::new(self.instance.whir_config.clone());
     let verifier = Verifier::new(&self.instance.whir_config);
 
-    // Domain separator / transcript setup.
-    let domainsep = DomainSeparator::new("whir_adapter")
-      .commit_statement(&self.instance.whir_config)
-      .add_whir_proof(&self.instance.whir_config);
-
-    // Prover state / challenger.
-    let mut prover_state = domainsep.to_prover_state();
-
-    // Commit polynomial.
-    let committer = CommitmentWriter::new(self.instance.whir_config.clone());
-    let witness = committer
-      .commit(&mut prover_state, &self.polynomial.0)
-      .map_err(|_| BackendError::Unsupported("WHIR commitment failed"))?;
-
-    // Prove.
     let (constraint_eval_point, deferred) = prover
       .prove(&mut prover_state, self.statement.clone(), witness)
       .map_err(|_| BackendError::Unsupported("WHIR prove failed"))?;
 
-    // Verifier side.
     let mut verifier_state = domainsep.to_verifier_state(prover_state.narg_string());
     let commitment_reader = CommitmentReader::new(&self.instance.whir_config);
     let parsed_commitment = commitment_reader
@@ -280,7 +269,6 @@ impl WhirProverContext {
       .verify(&mut verifier_state, &parsed_commitment, &self.statement)
       .map_err(|_| BackendError::Unsupported("WHIR verification failed"))?;
 
-    // Sanity-check that prover and verifier agree on deferred constraint data.
     if verifier_point != constraint_eval_point || verifier_deferred != deferred {
       return Err(BackendError::Unsupported(
         "WHIR verifier outputs did not match prover outputs",
@@ -341,12 +329,14 @@ pub fn build_whir_instance(
 
 fn instance_hash_seed(commitment_root: &[u8], poly: &WhirPolynomial) -> [u8; 32] {
   let mut hasher = Blake3Hasher::new();
+  hasher.update(b"whir_residual_fs_seed");
   hasher.update(commitment_root);
   hasher.update(&(poly.0.num_variables() as u64).to_le_bytes());
   hasher.update(&(poly.0.num_coeffs() as u64).to_le_bytes());
   hasher.finalize().into()
 }
 
+#[allow(dead_code)]
 fn build_zero_sum_statement(poly: &WhirPolynomial) -> Result<WhirStatement<Field64>, BackendError> {
   let num_vars = poly.0.num_variables();
   if num_vars > MAX_STATEMENT_VARS {
@@ -406,6 +396,18 @@ pub(crate) fn build_residual_statement(
     }
   }
 
+  // Add one random linear combination of all residual evaluations to bind the polynomial globally.
+  // This still keeps verifier cost bounded by MAX_STATEMENT_VARS.
+  if num_vars > 0 {
+    let eval_len = 1usize << num_vars;
+    let mut weights: Vec<Field64> = Vec::with_capacity(eval_len);
+    for _ in 0..eval_len {
+      weights.push(Field64::from(rng.next_u64()));
+    }
+    let weight_list = EvaluationsList::new(weights);
+    stmt.add_constraint(Weights::linear(weight_list), Field64::ZERO);
+  }
+
   Ok(stmt)
 }
 
@@ -454,7 +456,7 @@ pub fn prove_r1cs_with_encoder(
 
   let statement = build_residual_statement(&polynomial, commitment_root.as_ref())?;
   let ctx = WhirProverContext::new(instance, polynomial, statement);
-  ctx.prove()
+  ctx.prove_with_witness(domainsep, prover_state, witness)
 }
 
 /// Placeholder for a WHIR-backed SNARK proving path. Eventually this will translate Spartan's R1CS
