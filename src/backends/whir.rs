@@ -13,10 +13,12 @@ use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
 use spongefish_pow::blake3::Blake3PoW;
 use std::sync::Arc;
+use rand::thread_rng;
 use whir::crypto::fields::{Field64, Field64_2};
 use whir::crypto::merkle_tree::blake3::{Blake3Compress, Blake3LeafHash, Blake3MerkleTreeParams};
 use whir::crypto::merkle_tree::parameters::default_config;
 use whir::ntt::RSDefault;
+use whir::poly_utils::coeffs::CoefficientList;
 use whir::whir::parameters::{
   DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
   ProtocolParameters, SoundnessType, WhirConfig as ArkWhirConfig,
@@ -183,6 +185,24 @@ pub struct WhirR1csInstance {
   pub mv_params: MultivariateParameters<Field64>,
 }
 
+/// Context object that will eventually drive WHIR proving.
+pub struct WhirProverContext {
+  pub instance: WhirR1csInstance,
+}
+
+impl WhirProverContext {
+  pub fn new(instance: WhirR1csInstance) -> Self {
+    Self { instance }
+  }
+
+  /// Placeholder hook to run the WHIR prover once R1CS → multilinear encoding is implemented.
+  pub fn prove(self) -> Result<(), BackendError> {
+    Err(BackendError::Unsupported(
+      "PCS/sum-check wiring not implemented; need R1CS→multilinear encoding and WHIR prover call",
+    ))
+  }
+}
+
 /// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
 /// the full WHIR statement or handle domain parameters.
 pub fn build_whir_statement(
@@ -231,6 +251,15 @@ pub fn build_whir_instance(
   })
 }
 
+/// Placeholder for encoding an R1CS into WHIR's multilinear polynomial representation.
+pub fn encode_r1cs_to_whir_polynomial(
+  _instance: &WhirR1csInstance,
+) -> Result<CoefficientList<Field64>, BackendError> {
+  Err(BackendError::Unsupported(
+    "R1CS → WHIR multilinear encoding is not implemented",
+  ))
+}
+
 /// Placeholder hook where the R1CS → WHIR translation and proof generation will live.
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
@@ -250,10 +279,10 @@ pub fn prove_r1cs_with_whir(
     whir_config,
     mv_params,
   )?;
-  let _ = instance;
-  Err(BackendError::Unsupported(
-    "WHIR proving path missing: sum-check/PCS wiring not implemented",
-  ))
+  // Encode the R1CS into WHIR's polynomial form (currently unimplemented).
+  let _poly = encode_r1cs_to_whir_polynomial(&instance)?;
+  let ctx = WhirProverContext::new(instance);
+  ctx.prove()
 }
 
 /// Placeholder for a WHIR-backed SNARK proving path. Eventually this will translate Spartan's R1CS
