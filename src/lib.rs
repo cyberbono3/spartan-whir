@@ -31,6 +31,10 @@ mod transcript;
 mod unipoly;
 #[doc = "Adapters and configuration for optional proof backends such as WHIR."]
 pub mod backends;
+#[cfg(feature = "whir-backend")]
+pub use backends::whir::{
+  DefaultEncoder, NaiveZeroEncoder, WhirEncoder, WhirProverContext, WhirPolynomial,
+};
 
 use core::cmp::max;
 use backends::{BackendError, BackendFlavor, ProofBackend};

@@ -2,10 +2,11 @@
 
 use super::{scalar_to_whir_field, translate_assignments_to_whir};
 use crate::backends::whir::{build_protocol_params_from_config, build_whir_instance, WhirR1csView};
-use crate::backends::whir::encoder::NaiveZeroEncoder;
+use crate::backends::whir::encoder::{NaiveZeroEncoder, ResidualEncoder};
 use crate::backends::WhirBackend;
 use crate::{Instance, InputsAssignment, VarsAssignment};
 use curve25519_dalek::scalar::Scalar;
+use crate::backends::whir::build_residual_statement;
 
 #[test]
 fn scalar_conversion_is_deterministic() {
@@ -13,6 +14,16 @@ fn scalar_conversion_is_deterministic() {
   let a = scalar_to_whir_field(&s).unwrap();
   let b = scalar_to_whir_field(&s).unwrap();
   assert_eq!(a, b);
+}
+
+#[test]
+fn scalar_conversion_rejects_large_values() {
+  // Set high bytes to force rejection.
+  let mut bytes = [0u8; 32];
+  bytes[8] = 1;
+  let s = Scalar::from_bytes_mod_order(bytes);
+  let err = scalar_to_whir_field(&s).unwrap_err();
+  assert!(matches!(err, crate::backends::BackendError::Unsupported(_)));
 }
 
 #[test]
@@ -51,4 +62,29 @@ fn naive_zero_encoder_rejects_large_instances() {
   let encoder = NaiveZeroEncoder { max_vars: 0 }; // force rejection
   let err = encoder.encode(&whir_instance).unwrap_err();
   assert!(matches!(err, crate::backends::BackendError::Unsupported(_)));
+}
+
+#[test]
+fn residual_encoder_matches_empty_r1cs() {
+  // Empty matrices imply zero residuals.
+  let inst = Instance::new(2, 1, 0, &[], &[], &[]).unwrap();
+  let vars = VarsAssignment::new(&[Scalar::ZERO.to_bytes()]).unwrap();
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let backend = WhirBackend::default();
+  let (whir_config, mv_params) =
+    build_protocol_params_from_config(&backend, view.num_variables).unwrap();
+  let whir_instance =
+    build_whir_instance(&view, inst.shape(), &vars, &inputs, whir_config, mv_params).unwrap();
+
+  let encoder = ResidualEncoder;
+  let poly = encoder.encode(&whir_instance).unwrap();
+  // all evaluations must be zero
+  assert!(poly.0.clone().into_iter().all(|v| v.is_zero()));
+
+  // Statement enforces zero at a bounded set of corners (all-zero and all-one).
+  let stmt = build_residual_statement(&poly).unwrap();
+  assert_eq!(stmt.num_variables(), 2);
+  assert_eq!(stmt.constraints.len(), 2);
 }

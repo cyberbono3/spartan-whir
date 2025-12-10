@@ -5,6 +5,7 @@
 //! signatures that downstream examples/tests will rely on.
 
 mod encoder;
+pub use encoder::{DefaultEncoder, NaiveZeroEncoder, ResidualEncoder, WhirEncoder, WhirPolynomial};
 
 use super::{BackendError, BackendFlavor, ProofBackend, WhirBackend, WhirConfig};
 use crate::r1cs::R1CSShape;
@@ -21,15 +22,26 @@ use whir::crypto::fields::{Field64, Field64_2};
 use whir::crypto::merkle_tree::blake3::{Blake3Compress, Blake3LeafHash, Blake3MerkleTreeParams};
 use whir::crypto::merkle_tree::parameters::default_config;
 use whir::ntt::RSDefault;
+use whir::poly_utils::evals::EvaluationsList;
+use whir::poly_utils::multilinear::MultilinearPoint;
+use whir::whir::committer::CommitmentWriter;
 use whir::whir::parameters::{
   DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
   ProtocolParameters, SoundnessType, WhirConfig as ArkWhirConfig,
 };
+use whir::whir::statement::{Statement as WhirStatement, Weights};
+use whir::whir::{prover::Prover, verifier::Verifier};
+use whir::whir::domainsep::WhirDomainSeparator;
+use spongefish::DomainSeparator;
+use whir::whir::statement::{Statement as WhirStatement, Weights};
+use whir::poly_utils::evals::EvaluationsList;
 
 /// Concrete types chosen for the WHIR adapter, inspired by the upstream WHIR defaults.
 type MerkleConfig = Blake3MerkleTreeParams<Field64>;
 type PowStrategy = Blake3PoW;
 type WhirConfigType = ArkWhirConfig<Field64, MerkleConfig, PowStrategy>;
+/// Avoids allocating gigantic linear weights; adjust as needed for experiments.
+const MAX_STATEMENT_VARS: usize = 20;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -77,10 +89,16 @@ pub fn ensure_whir_backend<B: ProofBackend>(backend: &B) -> Result<(), BackendEr
 /// injective homomorphism and may not be appropriate for real proof systems without additional
 /// embedding design (e.g., hashing-to-field or circuit-level re-encoding). Use cautiously.
 pub fn scalar_to_whir_field(_scalar: &Scalar) -> Result<Field64, BackendError> {
-  // This maps a Ristretto scalar (little-endian bytes) into the Goldilocks-like field by reducing
-  // modulo the target field prime. This is deterministic but **not** an injective homomorphism and
-  // must be reviewed for soundness for your use-case.
-  Ok(Field64::from_le_bytes_mod_order(&_scalar.to_bytes()))
+  // For a sound encoding we require the value to already fit in Goldilocks; reject anything larger
+  // instead of reducing modulo the field prime.
+  let bytes = _scalar.to_bytes();
+  if bytes[8..].iter().any(|&b| b != 0) {
+    return Err(BackendError::Unsupported(
+      "scalar not representable in Goldilocks; re-express the circuit over Goldilocks field",
+    ));
+  }
+  let little = u64::from_le_bytes(bytes[..8].try_into().unwrap());
+  Ok(Field64::from(little))
 }
 
 /// Translate variable and input assignments into WHIR's field representation.
@@ -191,18 +209,65 @@ pub struct WhirR1csInstance {
 pub struct WhirProverContext {
   pub instance: WhirR1csInstance,
   pub polynomial: WhirPolynomial,
+  pub statement: WhirStatement<Field64>,
 }
 
 impl WhirProverContext {
-  pub fn new(instance: WhirR1csInstance, polynomial: WhirPolynomial) -> Self {
-    Self { instance, polynomial }
+  pub fn new(
+    instance: WhirR1csInstance,
+    polynomial: WhirPolynomial,
+    statement: WhirStatement<Field64>,
+  ) -> Self {
+    Self {
+      instance,
+      polynomial,
+      statement,
+    }
   }
 
   /// Placeholder hook to run the WHIR prover once R1CS → multilinear encoding is implemented.
   pub fn prove(self) -> Result<(), BackendError> {
-    Err(BackendError::Unsupported(
-      "PCS/sum-check wiring not implemented; need R1CS→multilinear encoding and WHIR prover call",
-    ))
+    // Build prover and verifier configs.
+    let prover = Prover::new(self.instance.whir_config.clone());
+    let verifier = Verifier::new(&self.instance.whir_config);
+
+    // Domain separator / transcript setup.
+    let domainsep = DomainSeparator::new("whir_adapter")
+      .commit_statement(&self.instance.whir_config)
+      .add_whir_proof(&self.instance.whir_config);
+
+    // Prover state / challenger.
+    let mut prover_state = domainsep.to_prover_state();
+
+    // Commit polynomial.
+    let committer = CommitmentWriter::new(self.instance.whir_config.clone());
+    let witness = committer
+      .commit(&mut prover_state, &self.polynomial.0)
+      .map_err(|_| BackendError::Unsupported("WHIR commitment failed"))?;
+
+    // Prove.
+    let (constraint_eval_point, deferred) = prover
+      .prove(&mut prover_state, self.statement.clone(), witness)
+      .map_err(|_| BackendError::Unsupported("WHIR prove failed"))?;
+
+    // Verifier side.
+    let mut verifier_state = domainsep.to_verifier_state(prover_state.narg_string());
+    let commitment_reader = whir::whir::committer::CommitmentReader::new(&self.instance.whir_config);
+    let parsed_commitment = commitment_reader
+      .parse_commitment(&mut verifier_state)
+      .map_err(|_| BackendError::Unsupported("WHIR commitment parse failed"))?;
+
+    verifier
+      .verify(
+        &mut verifier_state,
+        &parsed_commitment,
+        &self.statement,
+        constraint_eval_point,
+        &deferred,
+      )
+      .map_err(|_| BackendError::Unsupported("WHIR verification failed"))?;
+
+    Ok(())
   }
 }
 
@@ -254,14 +319,54 @@ pub fn build_whir_instance(
   })
 }
 
+fn build_zero_sum_statement(poly: &WhirPolynomial) -> Result<WhirStatement<Field64>, BackendError> {
+  let num_vars = poly.0.num_variables();
+  if num_vars > MAX_STATEMENT_VARS {
+    return Err(BackendError::Unsupported(
+      "statement construction would allocate more than MAX_STATEMENT_VARS variables",
+    ));
+  }
+  let weights = EvaluationsList::new(vec![Field64::ONE; 1 << num_vars]);
+  let mut stmt = WhirStatement::new(num_vars);
+  stmt.add_constraint(Weights::linear(weights), Field64::ZERO);
+  Ok(stmt)
+}
+
+/// Build a small statement that samples a few corners to enforce the residual polynomial is zero.
+/// This keeps constraints bounded (constant number) for efficiency; it is weaker than checking all
+/// corners and should be replaced with a proper challenge-sampled scheme.
+pub(crate) fn build_residual_statement(
+  poly: &WhirPolynomial,
+) -> Result<WhirStatement<Field64>, BackendError> {
+  let num_vars = poly.0.num_variables();
+  if num_vars > MAX_STATEMENT_VARS {
+    return Err(BackendError::Unsupported(
+      "residual statement would allocate more than MAX_STATEMENT_VARS variables",
+    ));
+  }
+  let mut stmt = WhirStatement::new(num_vars);
+
+  // Always check the all-zero corner.
+  let zero_point = MultilinearPoint::new(vec![Field64::ZERO; num_vars]);
+  stmt.add_constraint(Weights::evaluation(zero_point), Field64::ZERO);
+
+  if num_vars > 0 {
+    // Also check the all-one corner.
+    let one_point = MultilinearPoint::new(vec![Field64::ONE; num_vars]);
+    stmt.add_constraint(Weights::evaluation(one_point), Field64::ZERO);
+  }
+
+  Ok(stmt)
+}
+
 /// Placeholder hook where the R1CS → WHIR translation and proof generation will live. Uses the
-/// default encoder (currently unimplemented).
+/// residual encoder by default.
 pub fn prove_r1cs_with_whir(
   backend: &WhirBackend,
   view: WhirR1csView<'_>,
   shape: &R1CSShape,
 ) -> Result<(), BackendError> {
-  prove_r1cs_with_encoder(backend, view, shape, &DefaultEncoder)
+  prove_r1cs_with_encoder(backend, view, shape, &ResidualEncoder)
 }
 
 /// Same as `prove_r1cs_with_whir` but lets callers supply a custom encoder implementation.
@@ -284,9 +389,10 @@ pub fn prove_r1cs_with_encoder(
     whir_config,
     mv_params,
   )?;
-  // Encode the R1CS into WHIR's polynomial form (currently unimplemented).
+  // Encode the R1CS into WHIR's polynomial form.
   let polynomial = encoder.encode(&instance)?;
-  let ctx = WhirProverContext::new(instance, polynomial);
+  let statement = build_residual_statement(&polynomial)?;
+  let ctx = WhirProverContext::new(instance, polynomial, statement);
   ctx.prove()
 }
 

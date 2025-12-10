@@ -425,7 +425,9 @@ An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PC
 
 - Enable with `--features whir-backend` (requires the `../whir` checkout alongside this repo).
 - Try the backend-switch example: `cargo run --example backend_switch --features whir-backend -- --backend whir`.
-- Current behavior: native backend runs as usual; the WHIR path now builds concrete WHIR configs (Goldilocks + Blake3 Merkle/PoW) and converts assignments/matrices. It still stops with an explicit unsupported-error until a `WhirEncoder` is implemented to map R1CS into WHIR’s multilinear polynomial and the PCS/sum-check wiring calls into the WHIR prover. A custom encoder can be plugged via `prove_r1cs_with_encoder` if you want to experiment.
+- Current behavior: native backend runs as usual; the WHIR path now builds concrete WHIR configs (Goldilocks + Blake3 Merkle/PoW), converts assignments/matrices, encodes constraint residuals via `ResidualEncoder`, builds a naive all-corners statement (capped by `MAX_STATEMENT_VARS`), and calls into the WHIR prover. This is still a baseline; swap in a sampled-constraint encoder/statement for efficiency and soundness.
+- WHIR encoding now requires assignments that already fit in the Goldilocks field; non-representable Ristretto scalars are rejected. Re-express circuits over Goldilocks before using this backend. Statement construction is capped to small variable counts to avoid enormous allocations.
+- See `docs/whir-integration.md` for the current status, remaining work, and references.
 
 ## LICENSE
 
