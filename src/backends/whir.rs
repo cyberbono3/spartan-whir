@@ -177,6 +177,8 @@ pub fn prove_r1cs_with_whir(
   shape: &R1CSShape,
 ) -> Result<(), BackendError> {
   let _config: &WhirConfig = backend.config();
+  // Surface protocol mapping gaps early.
+  build_protocol_params_from_config(backend)?;
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
