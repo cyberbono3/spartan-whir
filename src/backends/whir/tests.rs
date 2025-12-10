@@ -145,3 +145,27 @@ fn whir_round_trip_two_constraints() {
   let proof = res.unwrap();
   verify_whir_proof_bundle(&proof).unwrap();
 }
+
+#[test]
+fn whir_round_trip_with_public_input() {
+  // Constraint: x * input = 10, with input public and x witness = 2, input=5.
+  let num_cons = 1usize;
+  let num_vars = 1usize;
+  let num_inputs = 1usize;
+  let one = Scalar::ONE.to_bytes();
+  let ten = Scalar::from(10u64).to_bytes();
+  // z = [x, 1, input]
+  let A = vec![(0usize, 0usize, one)];
+  let B = vec![(0usize, 2usize, one)]; // public input column
+  let C = vec![(0usize, 2usize, ten)];
+
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+
+  let vars = VarsAssignment::new(&[Scalar::from(2u64).to_bytes()]).unwrap();
+  let inputs = InputsAssignment::new(&[Scalar::from(5u64).to_bytes()]).unwrap();
+
+  let backend = WhirBackend::default();
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let proof = prove_r1cs_with_whir(&backend, view, inst.shape()).unwrap();
+  verify_whir_proof_bundle(&proof).unwrap();
+}
