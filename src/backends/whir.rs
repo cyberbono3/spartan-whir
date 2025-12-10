@@ -11,13 +11,7 @@ use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, In
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-use ark_ff::PrimeField;
 use whir::crypto::fields::Field64;
-use whir::whir::parameters::WhirConfig as InnerWhirConfig;
-use whir::whir::parameters::{
-  DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
-  ProtocolParameters, SoundnessType,
-};
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -117,10 +111,10 @@ pub struct WhirR1csInstance {
   pub matrices: WhirSparseMatrices,
   pub assignment_vars: Vec<Field64>,
   pub assignment_inputs: Vec<Field64>,
-  /// Placeholder for protocol parameters once mapping is defined.
-  pub protocol_params: Option<ProtocolParameters<(), ()>>,
-  /// Placeholder for multivariate params (domain size) once mapping is defined.
-  pub mv_params: Option<MultivariateParameters<Field64>>,
+  /// Placeholder string to stash parameter mapping decisions when implemented.
+  pub protocol_hint: Option<String>,
+  /// Placeholder for multivariate/domain sizing once mapped to WHIR types.
+  pub mv_hint: Option<usize>,
 }
 
 /// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
@@ -157,7 +151,6 @@ pub fn build_whir_instance(
 ) -> Result<WhirR1csInstance, BackendError> {
   let matrices = build_whir_statement(view, shape)?;
   let (assignment_vars, assignment_inputs) = translate_assignments_to_whir(vars, inputs)?;
-  // TODO: add domain/FFT parameters and Merkle/hash selections compatible with WHIR config.
   Ok(WhirR1csInstance {
     num_constraints: view.num_constraints,
     num_variables: view.num_variables,
@@ -165,8 +158,8 @@ pub fn build_whir_instance(
     matrices,
     assignment_vars,
     assignment_inputs,
-    protocol_params: None,
-    mv_params: None,
+    protocol_hint: None,
+    mv_hint: None,
   })
 }
 
