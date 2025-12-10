@@ -11,7 +11,21 @@ use crate::{ComputationCommitment, ComputationDecommitment, InputsAssignment, In
 use crate::SNARKGens;
 use curve25519_dalek::scalar::Scalar;
 use merlin::Transcript;
-use whir::crypto::fields::Field64;
+use spongefish_pow::blake3::Blake3PoW;
+use std::sync::Arc;
+use whir::crypto::fields::{Field64, Field64_2};
+use whir::crypto::merkle_tree::blake3::{Blake3Compress, Blake3LeafHash, Blake3MerkleTreeParams};
+use whir::crypto::merkle_tree::parameters::default_config;
+use whir::ntt::RSDefault;
+use whir::whir::parameters::{
+  DeduplicationStrategy, FoldingFactor, MerkleProofStrategy, MultivariateParameters,
+  ProtocolParameters, SoundnessType, WhirConfig as ArkWhirConfig,
+};
+
+/// Concrete types chosen for the WHIR adapter, inspired by the upstream WHIR defaults.
+type MerkleConfig = Blake3MerkleTreeParams<Field64>;
+type PowStrategy = Blake3PoW;
+type WhirConfigType = ArkWhirConfig<Field64, MerkleConfig, PowStrategy>;
 
 /// Captures the minimal data we expect to shuttle into the WHIR prover.
 #[derive(Debug)]
@@ -83,21 +97,67 @@ pub fn translate_assignments_to_whir(
   Ok((whir_vars, whir_inputs))
 }
 
-/// Placeholder for building WHIR protocol parameters from the backend config.
-///
-/// TODO: Select concrete Merkle hash, PoW strategy, folding factor, and domain sizes using WHIR
-/// types (`WhirConfig`, `ProtocolParameters`, `MultivariateParameters`), then return them to plug
-/// into the prover/verifier. For now, this returns a hint string so we can stash chosen knobs
-/// without committing to a specific instantiation.
-pub fn build_protocol_params_from_config(backend: &WhirBackend) -> Result<String, BackendError> {
+/// Build WHIR protocol and multivariate parameters from the backend config and instance size.
+pub fn build_protocol_params_from_config(
+  backend: &WhirBackend,
+  num_variables: usize,
+) -> Result<(WhirConfigType, MultivariateParameters<Field64>), BackendError> {
   let cfg = backend.config();
-  let hint = format!(
-    "WHIR params: security={} pow_bits={:?} folding_factor={:?} field={:?} hash={:?} rate={:?}",
-    cfg.security_level, cfg.pow_bits, cfg.folding_factor, cfg.field, cfg.hash, cfg.rate_log_inv
-  );
-  // Placeholder: return the hint so we can propagate context even though the params are not yet
-  // constructed. TODO: swap this with real ProtocolParameters and MultivariateParameters.
-  Ok(hint)
+
+  // Only support Blake3 + Goldilocks for now, mirroring upstream defaults.
+  if let Some(hash) = cfg.hash {
+    if hash.to_lowercase() != "blake3" {
+      return Err(BackendError::Unsupported("only Blake3 hash is supported in WHIR adapter"));
+    }
+  }
+  if let Some(field) = cfg.field {
+    if !field.to_lowercase().contains("goldilocks") {
+      return Err(BackendError::Unsupported("only Goldilocks field is supported in WHIR adapter"));
+    }
+  }
+
+  let soundness = match cfg.soundness {
+    Some("UniqueDecoding") => SoundnessType::UniqueDecoding,
+    Some("ProvableList") => SoundnessType::ProvableList,
+    Some("ConjectureList") | None => SoundnessType::ConjectureList,
+    Some(_) => {
+      return Err(BackendError::Unsupported(
+        "unsupported soundness type; use UniqueDecoding, ProvableList, or ConjectureList",
+      ))
+    }
+  };
+
+  let folding_factor = FoldingFactor::Constant(cfg.folding_factor.unwrap_or(4) as usize);
+  let pow_bits = cfg.pow_bits.unwrap_or(0) as usize;
+  let rate_log_inv = cfg.rate_log_inv.unwrap_or(1) as usize;
+
+  let mut rng = rand::thread_rng();
+  let (leaf_hash_params, two_to_one_params) =
+    default_config::<Field64_2, Blake3LeafHash<Field64_2>, Blake3Compress>(&mut rng);
+
+  let mv_params = MultivariateParameters::new(num_variables);
+
+  let protocol_params = ProtocolParameters::<MerkleConfig, PowStrategy> {
+    initial_statement: true,
+    security_level: cfg.security_level as usize,
+    pow_bits,
+    folding_factor,
+    leaf_hash_params,
+    two_to_one_params,
+    soundness_type: soundness,
+    _pow_parameters: Default::default(),
+    starting_log_inv_rate: rate_log_inv,
+    batch_size: 1,
+    deduplication_strategy: DeduplicationStrategy::Enabled,
+    merkle_proof_strategy: MerkleProofStrategy::Compressed,
+  };
+
+  let reed_solomon = Arc::new(RSDefault);
+  let basefield_reed_solomon = reed_solomon.clone();
+
+  let whir_config =
+    ArkWhirConfig::new(reed_solomon, basefield_reed_solomon, mv_params.clone(), protocol_params);
+  Ok((whir_config, mv_params))
 }
 
 /// Sparse matrices re-encoded over WHIR's base field.
@@ -117,10 +177,10 @@ pub struct WhirR1csInstance {
   pub matrices: WhirSparseMatrices,
   pub assignment_vars: Vec<Field64>,
   pub assignment_inputs: Vec<Field64>,
-  /// Placeholder string to stash parameter mapping decisions when implemented.
-  pub protocol_hint: Option<String>,
-  /// Placeholder for multivariate/domain sizing once mapped to WHIR types.
-  pub mv_hint: Option<usize>,
+  /// WHIR configuration with Merkle/hash/pow settings.
+  pub whir_config: WhirConfigType,
+  /// Multivariate parameters (domain sizing).
+  pub mv_params: MultivariateParameters<Field64>,
 }
 
 /// Turn a Spartan R1CS instance into WHIR-friendly sparse matrices. This does **not** yet build
@@ -154,7 +214,8 @@ pub fn build_whir_instance(
   shape: &R1CSShape,
   vars: &VarsAssignment,
   inputs: &InputsAssignment,
-  protocol_hint: Option<String>,
+  whir_config: WhirConfigType,
+  mv_params: MultivariateParameters<Field64>,
 ) -> Result<WhirR1csInstance, BackendError> {
   let matrices = build_whir_statement(view, shape)?;
   let (assignment_vars, assignment_inputs) = translate_assignments_to_whir(vars, inputs)?;
@@ -165,8 +226,8 @@ pub fn build_whir_instance(
     matrices,
     assignment_vars,
     assignment_inputs,
-    protocol_hint,
-    mv_hint: Some(view.num_variables),
+    whir_config,
+    mv_params,
   })
 }
 
@@ -177,14 +238,7 @@ pub fn prove_r1cs_with_whir(
   shape: &R1CSShape,
 ) -> Result<(), BackendError> {
   let _config: &WhirConfig = backend.config();
-  // Surface protocol mapping gaps early and stash a hint.
-  let protocol_hint = match build_protocol_params_from_config(backend) {
-    Ok(hint) => Some(hint),
-    Err(e) => {
-      // Preserve the error message to propagate later.
-      return Err(e);
-    }
-  };
+  let (whir_config, mv_params) = build_protocol_params_from_config(backend, view.num_variables)?;
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
@@ -193,7 +247,8 @@ pub fn prove_r1cs_with_whir(
     shape,
     view.assignment_vars,
     view.assignment_inputs,
-    protocol_hint,
+    whir_config,
+    mv_params,
   )?;
   let _ = instance;
   Err(BackendError::Unsupported(
