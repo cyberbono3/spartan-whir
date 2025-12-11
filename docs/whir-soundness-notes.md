@@ -26,3 +26,7 @@ Note: the encoding and constraint sampling must use the same transcript/seed on 
 3) Drive the WHIR prover with that statement, matching the verifier’s checks.
 
 Upstream references: `whir::whir::mod` (arkworks) and `whir-p3` (Plonky3 port) show how to configure parameters and build statements for WHIR-specific protocols.
+
+## Quick checks
+- Run unit tests (including WHIR round-trips and invalid-witness cases): `cargo test --features whir-backend`
+- Benchmark small instances: `cargo bench --bench whir_backend --features whir-backend`

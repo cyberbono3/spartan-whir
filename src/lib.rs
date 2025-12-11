@@ -483,6 +483,30 @@ impl SNARK {
     }
   }
 
+  /// Produce a WHIR-backed proof wrapper when the backend flavor is WHIR.
+  #[cfg(feature = "whir-backend")]
+  pub fn prove_whir_snark_with_backend(
+    inst: &Instance,
+    vars: VarsAssignment,
+    inputs: &InputsAssignment,
+    backend: &impl ProofBackend,
+  ) -> Result<backends::whir::WhirSnark, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Whir => {
+        let Some(whir_backend) = backend
+          .as_any()
+          .downcast_ref::<crate::backends::WhirBackend>() else {
+          return Err(BackendError::Unsupported("expected WhirBackend for WHIR flavor"));
+        };
+        crate::backends::whir::prove_whir_snark(whir_backend, inst, vars, inputs)
+      }
+      _ => Err(BackendError::Unsupported(
+        "prove_whir_snark_with_backend requires a WHIR backend",
+      )),
+    }
+  }
+
   /// A method to verify the SNARK proof of the satisfiability of an R1CS instance
   pub fn verify(
     &self,

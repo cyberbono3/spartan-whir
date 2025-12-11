@@ -3,12 +3,12 @@
 #![allow(clippy::assertions_on_result_states)]
 
 use curve25519_dalek::scalar::Scalar;
-use libspartan::backends::{BackendError, ProofBackend};
-use libspartan::{backends::NativeBackend, InputsAssignment, Instance, SNARKGens, VarsAssignment, SNARK};
+use libspartan::backends::BackendError;
+use libspartan::{InputsAssignment, Instance, SNARKGens, VarsAssignment, SNARK};
 #[cfg(feature = "whir-backend")]
-use libspartan::backends::WhirBackend;
+use libspartan::{backends::WhirBackend, verify_whir_snark};
+use libspartan::backends::NativeBackend;
 use merlin::Transcript;
-use rand::rngs::OsRng;
 
 #[allow(non_snake_case)]
 fn produce_r1cs() -> (
@@ -63,8 +63,8 @@ fn produce_r1cs() -> (
   let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
 
   // compute a satisfying assignment
-  let mut csprng: OsRng = OsRng;
-  let z0 = Scalar::random(&mut csprng);
+  // Use small, deterministic scalars so the WHIR Goldilocks check passes.
+  let z0 = Scalar::from(2u64);
   let z1 = z0 * z0; // constraint 0
   let z2 = z1 * z0; // constraint 1
   let z3 = z2 + z0; // constraint 2
@@ -98,26 +98,9 @@ fn produce_r1cs() -> (
   )
 }
 
-fn select_backend(args: &[String]) -> (String, Box<dyn ProofBackend>) {
-  let wants_whir = args.iter().any(|arg| arg == "--backend=whir" || arg == "--whir");
-
-  if wants_whir {
-    #[cfg(feature = "whir-backend")]
-    {
-      return ("whir".to_string(), Box::new(WhirBackend::default()));
-    }
-    #[cfg(not(feature = "whir-backend"))]
-    {
-      eprintln!("WHIR backend requested, but `whir-backend` feature is not enabled; falling back to native");
-    }
-  }
-
-  ("native".to_string(), Box::new(NativeBackend))
-}
-
 fn main() {
   let args: Vec<String> = std::env::args().collect();
-  let (backend_label, backend) = select_backend(&args);
+  let wants_whir = args.iter().any(|arg| arg == "--backend=whir" || arg == "--whir");
 
   // produce an R1CS instance
   let (
@@ -137,31 +120,58 @@ fn main() {
   let (comm, decomm) = SNARK::encode(&inst, &gens);
 
   // produce a proof of satisfiability using the selected backend
-  let mut prover_transcript = Transcript::new(b"backend_switch_example");
-  match SNARK::prove_with_backend(
-    &inst,
-    &comm,
-    &decomm,
-    assignment_vars,
-    &assignment_inputs,
-    &gens,
-    &mut prover_transcript,
-    backend.as_ref(),
-  ) {
-    Ok(proof) => {
-      println!("backend `{backend_label}` produced a proof");
-      // verify the proof of satisfiability
-      let mut verifier_transcript = Transcript::new(b"backend_switch_example");
-      assert!(proof
-        .verify(&comm, &assignment_inputs, &mut verifier_transcript, &gens)
-        .is_ok());
-      println!("proof verification successful!");
+  if wants_whir {
+    #[cfg(feature = "whir-backend")]
+    {
+      let backend = WhirBackend::default();
+      match SNARK::prove_whir_snark_with_backend(
+        &inst,
+        assignment_vars.clone(),
+        &assignment_inputs,
+        &backend,
+      ) {
+        Ok(snark) => {
+          println!("backend `whir` produced a WHIR proof bundle");
+          verify_whir_snark(&snark).expect("WHIR proof verification failed");
+          println!("WHIR proof verification successful!");
+        }
+        Err(err) => {
+          eprintln!("backend `whir` failed: {err}");
+        }
+      }
     }
-    Err(BackendError::NotImplemented(msg)) => {
-      eprintln!("backend `{backend_label}` is not implemented yet: {msg}");
+    #[cfg(not(feature = "whir-backend"))]
+    {
+      eprintln!("WHIR backend requested but feature disabled; skipping proof");
     }
-    Err(err) => {
-      eprintln!("backend `{backend_label}` failed: {err}");
+  } else {
+    let mut prover_transcript = Transcript::new(b"backend_switch_example");
+    let backend = NativeBackend;
+    match SNARK::prove_with_backend(
+      &inst,
+      &comm,
+      &decomm,
+      assignment_vars,
+      &assignment_inputs,
+      &gens,
+      &mut prover_transcript,
+      &backend,
+    ) {
+      Ok(proof) => {
+        println!("backend `native` produced a proof");
+        // verify the proof of satisfiability
+        let mut verifier_transcript = Transcript::new(b"backend_switch_example");
+        assert!(proof
+          .verify(&comm, &assignment_inputs, &mut verifier_transcript, &gens)
+          .is_ok());
+        println!("proof verification successful!");
+      }
+      Err(BackendError::NotImplemented(msg)) => {
+        eprintln!("backend `native` is not implemented yet: {msg}");
+      }
+      Err(err) => {
+        eprintln!("backend `native` failed: {err}");
+      }
     }
   }
 }

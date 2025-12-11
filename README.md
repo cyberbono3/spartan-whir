@@ -432,6 +432,8 @@ An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PC
 - Quick checks:
   - Unit tests: `cargo test --features whir-backend`
   - Bench: `cargo bench --bench whir_backend --features whir-backend`
+- API entry point:
+  - `SNARK::prove_whir_snark_with_backend` returns a `WhirSnark` when the backend flavor is WHIR; call `verify_whir_snark` to verify the resulting proof bundle.
 
 ## LICENSE
 
