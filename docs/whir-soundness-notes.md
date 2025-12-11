@@ -11,7 +11,7 @@ This is a starting point for wiring Spartan R1CS into WHIR. It is **not** a comp
 - A `build_residual_statement` helper enforces the residual polynomial is zero at a small set of corners (all-zero, all-one, plus a few deterministic random samples derived from the Merkle commitment root) to keep constraints bounded; WHIR proving is wired to the WHIR prover using this still-weak constraint set.
 
 ## Current prover wiring
-- `WhirProverContext::prove` now drives WHIR’s `CommitmentWriter`, `Prover`, and `Verifier` with the residual polynomial and the residual statement seeded from the polynomial commitment, using WHIR’s default domain separator.
+- `WhirProverContext::prove_with_witness` now drives WHIR’s `CommitmentWriter`, `Prover`, and `Verifier` with the residual polynomial and the residual statement seeded from the polynomial commitment, using WHIR’s default domain separator. The commitment is built once and reused; the returned `WhirProofBundle` carries the transcript (`narg_string`), statement, commitment root/OOD data, and config.
 - This is still not efficient or sound for large instances; it’s a baseline to swap out for a sampled-constraint system (see proposed plan below).
 
 ## Proposed constraint system (more efficient)
