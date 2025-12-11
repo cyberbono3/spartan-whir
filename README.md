@@ -429,6 +429,9 @@ An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PC
 - WHIR encoding now requires assignments that already fit in the Goldilocks field; non-representable Ristretto scalars are rejected. Re-express circuits over Goldilocks before using this backend. Statement construction is capped to small variable counts to avoid enormous allocations.
 - Helpers: `prove_whir_snark`/`verify_whir_snark` return/verify a `WhirSnark` wrapper; `WhirProofBundle` exposes the underlying transcript/commitment. There is also a Criterion bench (`benches/whir_backend.rs`) to probe small instances.
 - See `docs/whir-soundness-notes.md` for the current status, remaining work, and references.
+- Quick checks:
+  - Unit tests: `cargo test --features whir-backend`
+  - Bench: `cargo bench --bench whir_backend --features whir-backend`
 
 ## LICENSE
 
