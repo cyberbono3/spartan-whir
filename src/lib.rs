@@ -33,7 +33,8 @@ mod unipoly;
 pub mod backends;
 #[cfg(feature = "whir-backend")]
 pub use backends::whir::{
-  DefaultEncoder, NaiveZeroEncoder, WhirEncoder, WhirProverContext, WhirPolynomial,
+  DefaultEncoder, NaiveZeroEncoder, WhirEncoder, WhirProverContext, WhirPolynomial, WhirSnark,
+  WhirProofBundle, verify_whir_proof_bundle, prove_whir_snark, verify_whir_snark,
 };
 
 use core::cmp::max;
