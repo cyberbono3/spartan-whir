@@ -12,15 +12,15 @@ fn make_instance(size: usize) -> (Instance, VarsAssignment, InputsAssignment) {
     let num_vars = size;
     let num_inputs = 0usize;
 
-    let mut A = Vec::with_capacity(num_cons);
-    let mut B = Vec::with_capacity(num_cons);
-    let mut C = Vec::with_capacity(num_cons);
+    let mut a_entries = Vec::with_capacity(num_cons);
+    let mut b_entries = Vec::with_capacity(num_cons);
+    let mut c_entries = Vec::with_capacity(num_cons);
     for i in 0..size {
         let one = Scalar::ONE.to_bytes();
-        A.push((i, i, one));
-        B.push((i, i, one));
+        a_entries.push((i, i, one));
+        b_entries.push((i, i, one));
         let rhs = Scalar::from((i as u64) + 1).to_bytes();
-        C.push((i, 2, rhs)); // constant column is index num_vars (here 2 for size>=2)
+        c_entries.push((i, 2, rhs)); // constant column is index num_vars (here 2 for size>=2)
     }
 
     // Witness: x_i = i+1, which satisfies x_i^2 = x_i + 1.
@@ -29,7 +29,8 @@ fn make_instance(size: usize) -> (Instance, VarsAssignment, InputsAssignment) {
         vars.push(Scalar::from((i as u64) + 1).to_bytes());
     }
 
-    let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+    let inst = Instance::new(num_cons, num_vars, num_inputs, &a_entries, &b_entries, &c_entries)
+        .unwrap();
     let vars_assign = VarsAssignment::new(&vars).unwrap();
     let inputs = InputsAssignment::new(&[]).unwrap();
     (inst, vars_assign, inputs)

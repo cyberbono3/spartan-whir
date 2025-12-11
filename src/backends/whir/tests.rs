@@ -215,3 +215,26 @@ fn whir_residual_constraint_growth_is_bounded() {
   assert!(proof.statement.constraints.len() <= 2 + 4 + 1 + 8);
   verify_whir_proof_bundle(&proof).unwrap();
 }
+
+#[test]
+fn whir_rejects_blantantly_wrong_witness() {
+  // Constraint: x * 1 = 0, but witness sets x = 1, so residual polynomial is constant 1.
+  let num_cons = 1usize;
+  let num_vars = 1usize;
+  let num_inputs = 0usize;
+  let one = Scalar::ONE.to_bytes();
+  let zero = Scalar::ZERO.to_bytes();
+  // z = [x, 1]
+  let A = vec![(0usize, 0usize, one)];
+  let B = vec![(0usize, 1usize, one)]; // constant column
+  let C = vec![(0usize, 1usize, zero)];
+
+  let inst = Instance::new(num_cons, num_vars, num_inputs, &A, &B, &C).unwrap();
+  let vars = VarsAssignment::new(&[Scalar::ONE.to_bytes()]).unwrap(); // violates the constraint
+  let inputs = InputsAssignment::new(&[]).unwrap();
+
+  let backend = WhirBackend::default();
+  let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
+  let res = prove_r1cs_with_whir(&backend, view, inst.shape());
+  assert!(res.is_err(), "proof should fail for an invalid witness");
+}
