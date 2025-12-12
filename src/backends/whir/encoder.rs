@@ -72,6 +72,10 @@ impl WhirEncoder for ResidualEncoder {
       residues[i] = residues[i] * Bz[i] - Cz[i];
     }
 
+    // Pad to a power-of-two evaluation domain for WHIR's multilinear polynomial representation.
+    let padded_len = num_cons.next_power_of_two();
+    residues.resize(padded_len, Field64::ZERO);
+
     Ok(WhirPolynomial(CoefficientList::new(residues)))
   }
 }

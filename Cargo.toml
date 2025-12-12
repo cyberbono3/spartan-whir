@@ -68,6 +68,11 @@ name = "nizk"
 harness = false
 required-features = ["std"]
 
+[[bench]]
+name = "pcs_compare"
+harness = false
+required-features = ["whir-backend"]
+
 [features]
 default = ["std"]
 std = [

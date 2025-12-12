@@ -57,7 +57,7 @@ fn naive_zero_encoder_rejects_large_instances() {
   let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
   let backend = WhirBackend::default();
   let (whir_config, mv_params) =
-    build_protocol_params_from_config(&backend, view.num_variables).unwrap();
+    build_protocol_params_from_config(&backend, view.num_constraints.ilog2() as usize).unwrap();
   let whir_instance =
     build_whir_instance(&view, inst.shape(), &vars, &inputs, whir_config, mv_params).unwrap();
 
@@ -76,7 +76,7 @@ fn residual_encoder_matches_empty_r1cs() {
   let view = WhirR1csView::new(&inst, &vars, &inputs).unwrap();
   let backend = WhirBackend::default();
   let (whir_config, mv_params) =
-    build_protocol_params_from_config(&backend, view.num_variables).unwrap();
+    build_protocol_params_from_config(&backend, view.num_constraints.ilog2() as usize).unwrap();
   let whir_instance =
     build_whir_instance(&view, inst.shape(), &vars, &inputs, whir_config, mv_params).unwrap();
 

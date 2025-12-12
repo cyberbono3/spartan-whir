@@ -34,9 +34,8 @@ use whir::parameters::{
 use whir::whir::parameters::WhirConfig as ArkWhirConfig;
 use whir::whir::statement::{Statement as WhirStatement, Weights};
 use whir::whir::{prover::Prover, verifier::Verifier};
-use spongefish::{ByteDomainSeparator, DomainSeparator, ProverState};
-use spongefish::BytesToUnitSerialize;
-use spongefish::UnitToBytes;
+use spongefish::DomainSeparator;
+use spongefish::ProverState;
 use blake3::Hasher as Blake3Hasher;
 use rand::RngCore;
 use rand_chacha::ChaCha20Rng;
@@ -130,7 +129,7 @@ pub fn translate_assignments_to_whir(
 /// Build WHIR protocol and multivariate parameters from the backend config and instance size.
 pub fn build_protocol_params_from_config(
   backend: &WhirBackend,
-  num_variables: usize,
+  num_polynomial_variables: usize,
 ) -> Result<(WhirConfigType, MultivariateParameters<Field64>), BackendError> {
   let cfg = backend.config();
 
@@ -165,7 +164,7 @@ pub fn build_protocol_params_from_config(
   let (leaf_hash_params, two_to_one_params) =
     default_config::<Field64_2, Blake3LeafHash<Field64_2>, Blake3Compress>(&mut rng);
 
-  let mv_params = MultivariateParameters::new(num_variables);
+  let mv_params = MultivariateParameters::new(num_polynomial_variables);
 
   let protocol_params = ProtocolParameters::<MerkleConfig, PowStrategy> {
     initial_statement: true,
@@ -185,8 +184,19 @@ pub fn build_protocol_params_from_config(
   let reed_solomon = Arc::new(RSDefault);
   let basefield_reed_solomon = reed_solomon.clone();
 
-  let whir_config =
+  let mut whir_config =
     ArkWhirConfig::new(reed_solomon, basefield_reed_solomon, mv_params.clone(), protocol_params);
+
+  // Disable proof-of-work to keep adapter tests/benches fast and deterministic.
+  whir_config.starting_folding_pow_bits = 0.0;
+  whir_config.final_pow_bits = 0.0;
+  whir_config.final_folding_pow_bits = 0.0;
+  whir_config.max_pow_bits = 0;
+  for round in &mut whir_config.round_parameters {
+    round.pow_bits = 0.0;
+    round.folding_pow_bits = 0.0;
+  }
+
   Ok((whir_config, mv_params))
 }
 
@@ -382,14 +392,18 @@ fn challenger_bytes_from_root(
   commitment_root: &[u8],
   num_bytes: usize,
 ) -> Result<Vec<u8>, BackendError> {
-  let ds: DomainSeparator =
-    DomainSeparator::new("whir_residual_sampling").add_bytes(commitment_root.len(), "commitment_root");
-  let mut ps: ProverState = ds.to_prover_state();
-  ps.add_bytes(commitment_root)
-    .map_err(|_| BackendError::Unsupported("failed to absorb commitment root into residual sampler"))?;
-  let mut out = vec![0u8; num_bytes];
-  ps.fill_challenge_bytes(&mut out)
-    .map_err(|_| BackendError::Unsupported("failed to derive residual sampling bytes from challenger"))?;
+  let mut hasher = Blake3Hasher::new();
+  hasher.update(b"whir_residual_sampling");
+  hasher.update(commitment_root);
+  let mut out = Vec::with_capacity(num_bytes);
+  let mut counter: u32 = 0;
+  while out.len() < num_bytes {
+    let mut h = hasher.clone();
+    h.update(&counter.to_le_bytes());
+    out.extend_from_slice(h.finalize().as_bytes());
+    counter = counter.wrapping_add(1);
+  }
+  out.truncate(num_bytes);
   Ok(out)
 }
 
@@ -421,14 +435,34 @@ pub(crate) fn build_residual_statement(
     ));
   }
 
+  // For tiny instances, check all corners to avoid missing constraints.
+  let full_corner_check = num_vars <= 3;
+
   let mut stmt = WhirStatement::new(num_vars);
 
-  // Always check the all-zero and all-one corners if applicable.
-  let zero_point = MultilinearPoint(vec![Field64::ZERO; num_vars]);
-  stmt.add_constraint(Weights::evaluation(zero_point), Field64::ZERO);
-  if num_vars > 0 {
-    let one_point = MultilinearPoint(vec![Field64::ONE; num_vars]);
-    stmt.add_constraint(Weights::evaluation(one_point), Field64::ZERO);
+  if full_corner_check {
+    let total = 1usize << num_vars;
+    for idx in 0..total {
+      let coords = (0..num_vars)
+        .map(|bit| {
+          if (idx >> bit) & 1 == 0 {
+            Field64::ZERO
+          } else {
+            Field64::ONE
+          }
+        })
+        .collect();
+      stmt.add_constraint(Weights::evaluation(MultilinearPoint(coords)), Field64::ZERO);
+    }
+    return Ok(stmt);
+  } else {
+    // Always check the all-zero and all-one corners if applicable.
+    let zero_point = MultilinearPoint(vec![Field64::ZERO; num_vars]);
+    stmt.add_constraint(Weights::evaluation(zero_point), Field64::ZERO);
+    if num_vars > 0 {
+      let one_point = MultilinearPoint(vec![Field64::ONE; num_vars]);
+      stmt.add_constraint(Weights::evaluation(one_point), Field64::ZERO);
+    }
   }
 
   // Sample a small number of random corners deterministically from the commitment root to improve
@@ -496,7 +530,10 @@ pub fn prove_r1cs_with_encoder(
   encoder: &impl WhirEncoder,
 ) -> Result<WhirProofBundle, BackendError> {
   let _config: &WhirConfig = backend.config();
-  let (whir_config, mv_params) = build_protocol_params_from_config(backend, view.num_variables)?;
+  // WHIR wants multilinear polynomials over a power-of-two domain; pad the constraint count up.
+  let padded_cons = view.num_constraints.next_power_of_two();
+  let poly_vars = padded_cons.ilog2() as usize;
+  let (whir_config, mv_params) = build_protocol_params_from_config(backend, poly_vars)?;
   // TODO: translate the Spartan `Instance` matrices and assignments into WHIR's multilinear
   // polynomial representation, then drive the WHIR prover to produce a proof object we can
   // verify or wrap.
