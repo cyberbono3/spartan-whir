@@ -419,6 +419,22 @@ Profiler:: NIZK
   * NIZK::verify 414.5102ms
 ```
 
+## Experimental WHIR backend
+
+An optional `whir-backend` feature is scaffolded to experiment with WHIR as a PCS/sum-check provider. It is **not wired end-to-end yet**; field conversion and R1CS-to-WHIR encoding are still marked unsupported.
+
+- Enable with `--features whir-backend` (requires the `../whir` checkout alongside this repo).
+- Try the backend-switch example: `cargo run --example backend_switch --features whir-backend -- --backend whir`.
+- Current behavior: native backend runs as usual; the WHIR path now builds concrete WHIR configs (Goldilocks + Blake3 Merkle/PoW), converts assignments/matrices, encodes constraint residuals via `ResidualEncoder`, builds a bounded statement (all-zero/all-one plus a few sampled corners + one random linear combination) capped by `MAX_STATEMENT_VARS`, and calls into the WHIR prover. This is still a baseline; swap in a better constraint sampling strategy for stronger soundness.
+- WHIR encoding now requires assignments that already fit in the Goldilocks field; non-representable Ristretto scalars are rejected. Re-express circuits over Goldilocks before using this backend. Statement construction is capped to small variable counts to avoid enormous allocations.
+- Helpers: `prove_whir_snark`/`verify_whir_snark` return/verify a `WhirSnark` wrapper; `WhirProofBundle` exposes the underlying transcript/commitment. There is also a Criterion bench (`benches/whir_backend.rs`) to probe small instances.
+- See `docs/whir-soundness-notes.md` for the current status, remaining work, and references.
+- Quick checks:
+  - Unit tests: `cargo test --features whir-backend`
+  - Bench: `cargo bench --bench whir_backend --features whir-backend`
+- API entry point:
+  - `SNARK::prove_whir_snark_with_backend` returns a `WhirSnark` when the backend flavor is WHIR; call `verify_whir_snark` to verify the resulting proof bundle.
+
 ## LICENSE
 
 See [LICENSE](./LICENSE)

@@ -31,8 +31,16 @@ mod sumcheck;
 mod timer;
 mod transcript;
 mod unipoly;
+#[doc = "Adapters and configuration for optional proof backends such as WHIR."]
+pub mod backends;
+#[cfg(feature = "whir-backend")]
+pub use backends::whir::{
+  DefaultEncoder, NaiveZeroEncoder, WhirEncoder, WhirProverContext, WhirPolynomial, WhirSnark,
+  WhirProofBundle, verify_whir_proof_bundle, prove_whir_snark, verify_whir_snark,
+};
 
 use core::cmp::max;
+use backends::{BackendError, BackendFlavor, ProofBackend};
 use errors::{ProofVerifyError, R1CSError};
 use merlin::Transcript;
 use r1cs::{R1CSCommitment, R1CSCommitmentGens, R1CSDecommitment, R1CSEvalProof, R1CSShape};
@@ -276,6 +284,26 @@ impl Instance {
       InputsAssignment { assignment: inputs },
     )
   }
+
+  /// Number of constraints in the padded R1CS.
+  pub(crate) fn num_cons(&self) -> usize {
+    self.inst.get_num_cons()
+  }
+
+  /// Number of variables in the padded R1CS.
+  pub(crate) fn num_vars(&self) -> usize {
+    self.inst.get_num_vars()
+  }
+
+  /// Number of public inputs.
+  pub(crate) fn num_inputs(&self) -> usize {
+    self.inst.get_num_inputs()
+  }
+
+  /// Access the underlying R1CS shape for adapter-specific encodings.
+  pub(crate) fn shape(&self) -> &r1cs::R1CSShape {
+    &self.inst
+  }
 }
 
 /// `SNARKGens` holds public parameters for producing and verifying proofs with the Spartan SNARK
@@ -423,6 +451,66 @@ impl SNARK {
     }
   }
 
+  /// Produce a SNARK proof using a pluggable backend. Defaults to Spartan's native prover when
+  /// `BackendFlavor::Native` is supplied; other backends are feature-gated.
+  pub fn prove_with_backend(
+    inst: &Instance,
+    comm: &ComputationCommitment,
+    decomm: &ComputationDecommitment,
+    vars: VarsAssignment,
+    inputs: &InputsAssignment,
+    gens: &SNARKGens,
+    transcript: &mut Transcript,
+    backend: &impl ProofBackend,
+  ) -> Result<Self, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Native => Ok(Self::prove(inst, comm, decomm, vars, inputs, gens, transcript)),
+      #[cfg(feature = "whir-backend")]
+      BackendFlavor::Whir => {
+        let Some(whir_backend) = backend
+          .as_any()
+          .downcast_ref::<crate::backends::WhirBackend>() else {
+          return Err(BackendError::Unsupported("expected WhirBackend for WHIR flavor"));
+        };
+        crate::backends::whir::prove_snark_with_whir(
+          whir_backend,
+          inst,
+          comm,
+          decomm,
+          vars,
+          inputs,
+          gens,
+          transcript,
+        )
+      }
+    }
+  }
+
+  /// Produce a WHIR-backed proof wrapper when the backend flavor is WHIR.
+  #[cfg(feature = "whir-backend")]
+  pub fn prove_whir_snark_with_backend(
+    inst: &Instance,
+    vars: VarsAssignment,
+    inputs: &InputsAssignment,
+    backend: &impl ProofBackend,
+  ) -> Result<backends::whir::WhirSnark, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Whir => {
+        let Some(whir_backend) = backend
+          .as_any()
+          .downcast_ref::<crate::backends::WhirBackend>() else {
+          return Err(BackendError::Unsupported("expected WhirBackend for WHIR flavor"));
+        };
+        crate::backends::whir::prove_whir_snark(whir_backend, inst, vars, inputs)
+      }
+      _ => Err(BackendError::Unsupported(
+        "prove_whir_snark_with_backend requires a WHIR backend",
+      )),
+    }
+  }
+
   /// A method to verify the SNARK proof of the satisfiability of an R1CS instance
   pub fn verify(
     &self,
@@ -546,6 +634,25 @@ impl NIZK {
     NIZK {
       r1cs_sat_proof,
       r: (rx, ry),
+    }
+  }
+
+  /// Produce a NIZK proof using a pluggable backend. Currently only the native prover is wired.
+  pub fn prove_with_backend(
+    inst: &Instance,
+    vars: VarsAssignment,
+    input: &InputsAssignment,
+    gens: &NIZKGens,
+    transcript: &mut Transcript,
+    backend: &impl ProofBackend,
+  ) -> Result<Self, BackendError> {
+    backend.availability()?;
+    match backend.flavor() {
+      BackendFlavor::Native => Ok(Self::prove(inst, vars, input, gens, transcript)),
+      #[cfg(feature = "whir-backend")]
+      BackendFlavor::Whir => Err(BackendError::NotImplemented(
+        "WHIR-backed NIZK proving is not wired yet",
+      )),
     }
   }
 

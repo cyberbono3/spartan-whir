@@ -29,6 +29,13 @@ subtle = { version = "2.4", features = ["i128"], default-features = false }
 itertools = { version = "0.10.0", default-features = false }
 colored = { version = "2.0.0", default-features = false, optional = true }
 flate2 = { version = "1.0.14" }
+blake3 = "1.5"
+rand_chacha = "0.3"
+whir = { path = "../whir", optional = true }
+ark-ff = { version = "0.5", optional = true }
+spongefish = { git = "https://github.com/arkworks-rs/spongefish", rev = "ecb4f08373ed930175585c856517efdb1851fb47", optional = true }
+spongefish_pow = { package = "spongefish-pow", git = "https://github.com/arkworks-rs/spongefish", rev = "ecb4f08373ed930175585c856517efdb1851fb47", optional = true }
+ark-crypto-primitives = { version = "0.5", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 getrandom = { version = "0.2.15", default-features = false, features = ["js"] }
@@ -61,6 +68,11 @@ name = "nizk"
 harness = false
 required-features = ["std"]
 
+[[bench]]
+name = "pcs_compare"
+harness = false
+required-features = ["whir-backend"]
+
 [features]
 default = ["std"]
 std = [
@@ -76,3 +88,4 @@ std = [
 ]
 multicore = ["rayon"]
 profile = ["colored"]
+whir-backend = ["whir", "ark-ff", "spongefish", "spongefish_pow", "ark-crypto-primitives"]

@@ -27,6 +27,21 @@ impl SparseMatEntry {
   pub fn new(row: usize, col: usize, val: Scalar) -> Self {
     SparseMatEntry { row, col, val }
   }
+
+  /// Row index of the entry.
+  pub fn row(&self) -> usize {
+    self.row
+  }
+
+  /// Column index of the entry.
+  pub fn col(&self) -> usize {
+    self.col
+  }
+
+  /// Scalar value stored at the entry.
+  pub fn val(&self) -> &Scalar {
+    &self.val
+  }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -347,6 +362,11 @@ impl SparseMatPolynomial {
       num_vars_y,
       M,
     }
+  }
+
+  /// Returns the underlying sparse entries.
+  pub fn entries(&self) -> &[SparseMatEntry] {
+    &self.M
   }
 
   pub fn get_num_nz_entries(&self) -> usize {
